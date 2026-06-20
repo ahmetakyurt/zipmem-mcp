@@ -3,8 +3,8 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    // dist/coverage are generated; smoke-mcp.mjs is a standalone manual runner.
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "tests/smoke-mcp.mjs"],
+    // dist/coverage are generated; tests/*.mjs are standalone manual runners.
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "tests/*.mjs"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

@@ -96,10 +96,27 @@ Exit intent / context pressure ──► agent calls zipmem_save_and_compact
 
 | Tool | When the agent calls it | What it does |
 | --- | --- | --- |
-| **`zipmem_load_memory`** | First thing, every session | Returns blueprints, anchors, and lessons as compact text. |
-| **`zipmem_save_and_compact`** | On "exit/quit/goodbye" or near the context limit | Merges this session's blueprints/anchors/lessons into persistent memory. |
+| **`zipmem_load_memory`** | First thing, every session | Returns blueprints, anchors, and lessons as compact text. Surfaces a recovery banner if the previous session ended abruptly. |
+| **`zipmem_checkpoint`** | Periodically, after each meaningful unit of work | Stages incremental progress durably (crash-safe) without finalizing the session. |
+| **`zipmem_save_and_compact`** | On "exit/quit/goodbye" or near the context limit | Folds staged checkpoints + the final delta into persistent memory and closes the session. |
 
 The tool *descriptions* are written so the agent knows **when and why** to call them without you prompting it.
+
+---
+
+## Crash safety (hard exits & Ctrl+C)
+
+Relying on the agent to gracefully call `zipmem_save_and_compact` on the way out is fragile: a closed terminal window, `Ctrl+C`, or a killed process can skip it. zipmem defends against this in layers — and is honest about the limits:
+
+1. **Continuous checkpointing.** `zipmem_checkpoint` writes `.zipmem/session.json` atomically on every call. A hard exit therefore loses *at most the work since the last checkpoint*, and that data is already on disk — no death-handler required.
+2. **Parent-process lifecycle monitor.** The server watches the `claude` process via the stdin pipe (EOF when the parent dies), `SIGINT`/`SIGTERM`/`SIGHUP`, and a PID liveness probe. On any *catchable* termination it **synchronously folds the staged checkpoints into `state.json`** and records why the session ended.
+3. **Next-session recovery.** On startup the server detects a session that never closed cleanly, folds any leftover checkpoints into `state.json`, and `zipmem_load_memory` shows a **⚠️ ZipMem recovery** banner listing the git-changed files so the agent re-anchors them.
+
+> **Honest limitation:** a true hard kill (`SIGKILL`, `kill -9`, power loss) cannot be intercepted by *any* in-process handler — and semantic compaction can't run at death time anyway, because it requires the LLM. zipmem does **not** dump raw code or `git diff` into memory (that would violate Anchored Compacting). Instead, durability comes from **checkpoints already on disk** + **next-session recovery**, which together guarantee no *silent* loss: the worst case is "the last few un-checkpointed steps need redoing," and the next session is explicitly told what changed.
+
+The practical takeaway: **checkpoint as you go** (the injected directive tells the agent to), and abrupt exits become recoverable instead of catastrophic.
+
+> `.zipmem/session.json` is runtime state and is always gitignored (via `.zipmem/.gitignore`), even in `--shared` mode — only `state.json` is shared.
 
 ---
 
@@ -182,11 +199,12 @@ npx vitest run tests/core/state.test.ts
 npx vitest run -t "merges overlapping anchors"
 ```
 
-Manual end-to-end MCP smoke test (spawns the built server, runs the handshake, exercises save→load):
+Manual end-to-end smoke tests (build first):
 
 ```bash
 npm run build
-node tests/smoke-mcp.mjs /path/to/a/project
+node tests/smoke-mcp.mjs /path/to/a/project   # handshake + save→load
+node tests/smoke-crash.mjs                     # checkpoint → hard exit → recovery
 ```
 
 ---

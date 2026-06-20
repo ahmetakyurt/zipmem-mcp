@@ -37,18 +37,28 @@ src/cli/*  ─┘    (shared kernel)        └─ src/server/*
 - **`core/compactor.ts`** — deterministic helpers only (line-range parsing/union-merging, lesson dedup, id/timestamp stamping).
 - **`core/format.ts`** — renders `State` into the compact text returned by `zipmem_load_memory`.
 - **`core/directive.ts`** — the Constitutional Directive string injected into `CLAUDE.md` by `init`.
-- **`server/tools/*.ts`** — each tool file exports a **pure handler** (`loadMemoryHandler` / `saveCompactHandler`) plus a `register*` wiring function. Tests call the pure handlers directly, with no MCP transport.
+- **`core/session.ts`** — the crash-recovery layer: `.zipmem/session.json` lifecycle, the `pending` checkpoint buffer (`accumulatePending`/`applyPendingToState`), sync+async atomic I/O, and `gitChangedFilesSync`.
+- **`server/tools/*.ts`** — each tool file exports a **pure handler** (`loadMemoryHandler` / `saveCompactHandler` / `checkpointHandler`) plus a `register*` wiring function. Tests call the pure handlers directly, with no MCP transport.
+- **`server/lifecycle.ts`** — parent-process monitor + recovery: `flushOnShutdownSync` (signal/stdin/ppid → atomic flush), `runStartupRecovery`, `initializeSession`, `LifecycleMonitor`.
 
-### Load/save data flow
+### Three tools, one durability story
 
-`zipmem_load_memory` → `resolveProjectDir` → `loadState` → `formatMemory` → text.
-`zipmem_save_and_compact` → validate payload via `CompactionPayloadSchema` → `loadState` → `mergeState` → `pruneState` → `saveState`.
+There are **three** tools: `zipmem_load_memory`, `zipmem_checkpoint` (incremental, crash-safe staging), and `zipmem_save_and_compact` (finalize). Read `server/lifecycle.ts` + `core/session.ts` together — the crash-safety design is non-obvious.
+
+### Data flow
+
+- `zipmem_load_memory` → `loadState` → `formatMemory`, prepended with a recovery banner from `consumeRecoveryBanner` if the prior session ended unclean.
+- `zipmem_checkpoint` → `readSession` → `accumulatePending` → `writeSession` (durable; does **not** touch `state.json`).
+- `zipmem_save_and_compact` → fold `session.pending` + final payload → single `mergeState` → `pruneState` → `saveState`, then mark session `closed` and clear pending.
+- Startup (`index.ts`) → `initializeSession` (`runStartupRecovery` folds leftover pending into `state.json`) → `LifecycleMonitor.install()`.
 
 ## Invariants that are easy to violate
 
 - **The server must never write to stdout.** stdout carries the MCP JSON-RPC framing; any stray `console.log` corrupts it. All server diagnostics go to `console.error`. This is enforced by an eslint `no-console` rule scoped to `src/server/**` and `src/index.ts` — keep that rule satisfied rather than disabling it. (CLI files are exempt; they print to stdout intentionally.)
 - **The compaction intelligence lives in `core/directive.ts`, not in code.** `core/compactor.ts` contains *zero* LLM/AI logic — the agent produces the structured payload, the server only normalizes/dedups/merges. Do not add AI calls or network dependencies to the server; that is a deliberate architectural choice (dependency-free, zero-latency, no API keys).
-- **`saveState` is atomic** (write to `*.tmp`, then `rename`). Preserve this; never write `state.json` in place.
+- **`saveState` is atomic** (write to `*.tmp`, then `rename`). Preserve this; never write `state.json` in place. The same applies to `saveStateSync` / `writeSessionSync` used on the shutdown path — those must stay synchronous (no `await`) because they run inside signal handlers.
+- **The shutdown/recovery path must never throw.** `flushOnShutdownSync` and `runStartupRecovery` are wrapped in try/catch and are idempotent; a failure must degrade to "next session recovers from `session.json`," never crash the server. Semantic compaction is *never* attempted at death time (it needs the LLM), and raw code / `git diff` is *never* written into memory — only file paths as hints.
+- **Checkpoints are durability, not finalization.** `zipmem_checkpoint` only writes `session.json.pending`; it must not modify `state.json`. Finalization (the fold into `state.json`) happens exactly once — in `save_and_compact` or in recovery — to avoid double-counting `session_log`.
 - **Merge rules are precise** (see `mergeState`): immutable blueprints are kept verbatim and only superseded when an incoming blueprint with the same `category`+`title` sets `immutable: false`; anchors for the same file with overlapping/adjacent ranges union-merge (newest concept wins); duplicate lessons are skipped by case-insensitive summary containment. Changing any of these requires updating `tests/core/state.test.ts`.
 - **Directive injection is idempotent** via the `<!-- zipmem:start -->` / `<!-- zipmem:end -->` markers and `DIRECTIVE_VERSION` in `core/directive.ts`. If you change the directive body, bump `DIRECTIVE_VERSION` so `init` replaces stale blocks in place instead of appending a duplicate.
 

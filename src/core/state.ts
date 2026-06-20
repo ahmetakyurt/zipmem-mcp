@@ -1,4 +1,10 @@
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -60,6 +66,35 @@ export function stateExists(projectDir: string): boolean {
   return existsSync(resolveStatePath(projectDir));
 }
 
+/** Validate + serialize state, stamping the on-disk size into meta. */
+function serializeState(state: State): string {
+  const validated = StateSchema.parse(state);
+  const probe = `${JSON.stringify(validated, null, 2)}\n`;
+  validated.meta.state_size_bytes = Buffer.byteLength(probe, "utf8");
+  return `${JSON.stringify(validated, null, 2)}\n`;
+}
+
+/** Parse + validate raw state JSON, with clear errors. Shared by sync/async. */
+function parseStateText(raw: string, statePath: string): State {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `zipmem: ${statePath} is not valid JSON. Fix or delete it and re-run \`zipmem init\`.`,
+    );
+  }
+  const result = StateSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(
+      `zipmem: ${statePath} does not match the expected schema. ${result.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ")}`,
+    );
+  }
+  return result.data;
+}
+
 /**
  * Read and validate `.zipmem/state.json`. Returns a fresh empty state when the
  * file is missing so callers never special-case first run. Throws (with a clear
@@ -84,25 +119,24 @@ export async function loadState(
       `zipmem: failed to read ${statePath}: ${(err as Error).message}`,
     );
   }
+  return parseStateText(raw, statePath);
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error(
-      `zipmem: ${statePath} is not valid JSON. Fix or delete it and re-run \`zipmem init\`.`,
+/**
+ * Synchronous sibling of {@link loadState}, used on the abrupt-shutdown path
+ * where async I/O cannot be awaited inside a signal handler.
+ */
+export function loadStateSync(
+  projectDir: string,
+  fallbackProjectName?: string,
+): State {
+  const statePath = resolveStatePath(projectDir);
+  if (!existsSync(statePath)) {
+    return createEmptyState(
+      fallbackProjectName ?? path.basename(path.resolve(projectDir)),
     );
   }
-
-  const result = StateSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new Error(
-      `zipmem: ${statePath} does not match the expected schema. ${result.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`)
-        .join("; ")}`,
-    );
-  }
-  return result.data;
+  return parseStateText(readFileSync(statePath, "utf8"), statePath);
 }
 
 /**
@@ -114,19 +148,27 @@ export async function saveState(
   projectDir: string,
   state: State,
 ): Promise<void> {
-  const validated = StateSchema.parse(state);
-  const serialized = `${JSON.stringify(validated, null, 2)}\n`;
-
-  validated.meta.state_size_bytes = Buffer.byteLength(serialized, "utf8");
-  const finalSerialized = `${JSON.stringify(validated, null, 2)}\n`;
-
-  const dir = resolveZipmemDir(projectDir);
-  await mkdir(dir, { recursive: true });
+  const serialized = serializeState(state);
+  await mkdir(resolveZipmemDir(projectDir), { recursive: true });
 
   const statePath = resolveStatePath(projectDir);
   const tmpPath = `${statePath}.${randomUUID()}.tmp`;
-  await writeFile(tmpPath, finalSerialized, "utf8");
+  await writeFile(tmpPath, serialized, "utf8");
   await rename(tmpPath, statePath);
+}
+
+/**
+ * Synchronous, atomic sibling of {@link saveState}. The shutdown handler uses
+ * this to flush state before the process exits — no event loop turns available.
+ */
+export function saveStateSync(projectDir: string, state: State): void {
+  const serialized = serializeState(state);
+  mkdirSync(resolveZipmemDir(projectDir), { recursive: true });
+
+  const statePath = resolveStatePath(projectDir);
+  const tmpPath = `${statePath}.${randomUUID()}.tmp`;
+  writeFileSync(tmpPath, serialized, "utf8");
+  renameSync(tmpPath, statePath);
 }
 
 /**

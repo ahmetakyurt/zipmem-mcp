@@ -12,7 +12,7 @@ export const DIRECTIVE_START = "<!-- zipmem:start -->";
 export const DIRECTIVE_END = "<!-- zipmem:end -->";
 
 /** Bump when the directive body changes so `init` can detect/replace old blocks. */
-export const DIRECTIVE_VERSION = 1;
+export const DIRECTIVE_VERSION = 2;
 
 const DIRECTIVE_BODY = `## ZipMem — Session Memory Protocol (v${DIRECTIVE_VERSION})
 
@@ -26,11 +26,21 @@ from previous sessions. Do not ask the user whether to load memory — always lo
 it. Treat anchors as coordinates: if you need the code behind one, read the file
 at the given line range on demand.
 
-### 2. During the session — watch context pressure
-Stay aware of how full your context window is getting. Heavy signs: many large
-code blocks pasted in, the same files read repeatedly, long debugging
-transcripts. When pressure builds, proactively compact (step 3) rather than
-waiting to be told.
+### 2. During the session — checkpoint as you go
+Call **\`zipmem_checkpoint\`** periodically — after each meaningful unit of work
+(a feature wired up, a bug fixed, a decision made). Pass the same kind of
+structured fields as step 3 (blueprints / anchors / lessons + a running
+summary). This is cheap and **crash-safe**: if the session ends abruptly (the
+user hits Ctrl+C, closes the terminal, or the process is killed), checkpointed
+progress is recovered automatically on the next session, whereas anything never
+checkpointed or compacted is lost. Do not wait until the end to record work.
+
+Also stay aware of context-window pressure (many large code blocks, repeated
+file reads, long debugging transcripts); when it builds, compact (step 3).
+
+If a session begins with a **⚠️ ZipMem recovery** banner, the previous session
+ended abruptly: review the listed uncompacted files, capture any missing
+anchors/lessons, and compact (step 3) to reconcile.
 
 ### 3. Before ending OR when near the context limit — save & compact
 When the user signals they are done (e.g. "exit", "quit", "goodbye", "that's

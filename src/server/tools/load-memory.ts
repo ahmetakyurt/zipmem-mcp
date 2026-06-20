@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { formatMemory, type Section } from "../../core/format.js";
 import { loadState } from "../../core/state.js";
+import { readSession, writeSession } from "../../core/session.js";
 import { resolveProjectDir } from "../../utils/paths.js";
 
 export const LOAD_MEMORY_TOOL = "zipmem_load_memory";
@@ -49,7 +50,10 @@ export async function loadMemoryHandler(
     const projectDir = resolveProjectDir(args.project_dir);
     const state = await loadState(projectDir);
     const sections = args.sections?.length ? args.sections : (["all"] as Section[]);
-    const text = formatMemory(state, sections);
+    const memory = formatMemory(state, sections);
+
+    const banner = await consumeRecoveryBanner(projectDir);
+    const text = banner ? `${banner}\n\n${memory}` : memory;
     return { content: [{ type: "text", text }] };
   } catch (err) {
     return {
@@ -62,6 +66,50 @@ export async function loadMemoryHandler(
       isError: true,
     };
   }
+}
+
+/**
+ * If the previous session ended without a clean compaction, the startup
+ * recovery left a `recovery` block on the session file. Surface it once as a
+ * banner instructing the agent to reconcile the uncompacted changes, then mark
+ * it acknowledged so it is not shown again.
+ */
+async function consumeRecoveryBanner(
+  projectDir: string,
+): Promise<string | null> {
+  const session = await readSession(projectDir);
+  if (!session?.recovery || session.recovery.acknowledged) return null;
+
+  const r = session.recovery;
+  const recovered =
+    r.recovered_blueprints + r.recovered_anchors + r.recovered_lessons;
+  if (recovered === 0 && r.uncompacted_files.length === 0) {
+    // Nothing actionable — acknowledge silently.
+    session.recovery.acknowledged = true;
+    await writeSession(projectDir, session);
+    return null;
+  }
+
+  const lines: string[] = [];
+  lines.push("> ⚠️ **ZipMem recovery**");
+  lines.push(
+    `> The previous session ended without a clean compaction (reason: ${r.reason}).`,
+  );
+  if (recovered > 0) {
+    lines.push(
+      `> Recovered from checkpoints: ${r.recovered_blueprints} blueprint(s), ${r.recovered_anchors} anchor(s), ${r.recovered_lessons} lesson(s).`,
+    );
+  }
+  if (r.uncompacted_files.length > 0) {
+    lines.push(
+      `> These files had uncommitted changes that may not be captured — review them and add anchors/lessons now, then call zipmem_save_and_compact:`,
+    );
+    for (const f of r.uncompacted_files.slice(0, 20)) lines.push(`>   - ${f}`);
+  }
+
+  session.recovery.acknowledged = true;
+  await writeSession(projectDir, session);
+  return lines.join("\n");
 }
 
 export function registerLoadMemory(server: McpServer): void {

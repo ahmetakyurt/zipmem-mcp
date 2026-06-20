@@ -46,6 +46,17 @@ export async function inferProjectName(projectDir: string): Promise<string> {
   return path.basename(path.resolve(projectDir));
 }
 
+/**
+ * Write `.zipmem/.gitignore` so runtime artifacts (the ephemeral session
+ * buffer, temp files) are never committed — even in --shared mode, where the
+ * outer .gitignore intentionally tracks `.zipmem/` to share `state.json`.
+ */
+export async function writeInternalGitignore(zipmemDir: string): Promise<void> {
+  const giPath = path.join(zipmemDir, ".gitignore");
+  if (existsSync(giPath)) return;
+  await writeFile(giPath, "session.json\n*.tmp\n", "utf8");
+}
+
 export type DirectiveResult =
   | { action: "created"; file: string }
   | { action: "appended"; file: string }

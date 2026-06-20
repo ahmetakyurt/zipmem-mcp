@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createEmptyState, saveState, stateExists } from "../core/state.js";
-import { resolveStatePath } from "../utils/paths.js";
+import { resolveStatePath, resolveZipmemDir } from "../utils/paths.js";
 import {
   c,
   ensureGitignore,
@@ -10,6 +10,7 @@ import {
   injectDirective,
   success,
   warn,
+  writeInternalGitignore,
 } from "./helpers.js";
 
 export interface InitOptions {
@@ -42,6 +43,7 @@ export async function init(
     const projectName = await inferProjectName(resolved);
     const state = createEmptyState(projectName, shared);
     await saveState(resolved, state);
+    await writeInternalGitignore(resolveZipmemDir(resolved));
     success(
       `Created ${c.cyan(".zipmem/state.json")} for project ${c.bold(projectName)}${
         shared ? c.dim(" (shared)") : ""

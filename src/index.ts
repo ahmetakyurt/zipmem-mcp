@@ -2,6 +2,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./server/index.js";
+import { initializeSession, LifecycleMonitor } from "./server/lifecycle.js";
+import { resolveProjectDir } from "./utils/paths.js";
 import { getVersion } from "./utils/version.js";
 
 /**
@@ -16,12 +18,22 @@ async function main(): Promise<void> {
     version: getVersion(),
   });
 
+  // Resolve the project once at startup and pin the lifecycle/recovery to it.
+  const projectDir = resolveProjectDir();
+
+  // Fold any leftover checkpoints from a previously interrupted session into
+  // state.json and open a fresh active session.
+  await initializeSession(projectDir);
+
   registerTools(server);
+
+  // Best-effort flush of staged checkpoints on a catchable parent termination.
+  new LifecycleMonitor(projectDir).install();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Connected. Stay alive until stdin closes; the transport handles the loop.
-  console.error("[zipmem-mcp] ready");
+  console.error(`[zipmem-mcp] ready (project: ${projectDir})`);
 }
 
 main().catch((err: unknown) => {

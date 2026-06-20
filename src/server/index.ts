@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerCheckpoint } from "./tools/checkpoint.js";
 import { registerLoadMemory } from "./tools/load-memory.js";
 import { registerSaveCompact } from "./tools/save-compact.js";
 
@@ -6,4 +7,5 @@ import { registerSaveCompact } from "./tools/save-compact.js";
 export function registerTools(server: McpServer): void {
   registerLoadMemory(server);
   registerSaveCompact(server);
+  registerCheckpoint(server);
 }

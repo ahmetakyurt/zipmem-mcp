@@ -5,6 +5,13 @@ import {
   type CompactionPayload,
 } from "../../core/schema.js";
 import { loadState, mergeState, pruneState, saveState } from "../../core/state.js";
+import {
+  accumulatePending,
+  emptyPending,
+  pendingToPayload,
+  readSession,
+  writeSession,
+} from "../../core/session.js";
 import { resolveProjectDir } from "../../utils/paths.js";
 import type { ToolResult } from "./load-memory.js";
 
@@ -98,12 +105,33 @@ export async function saveCompactHandler(
       lessons: args.lessons ?? [],
     });
 
+    // Fold any staged checkpoints from this session into the final payload so
+    // nothing buffered for crash-safety is lost, and a single session record
+    // is produced.
+    const session = await readSession(projectDir);
+    const folded = accumulatePending(session?.pending ?? emptyPending(), {
+      session_summary: payload.session_summary,
+      blueprints: payload.blueprints,
+      anchors: payload.anchors,
+      lessons: payload.lessons,
+    });
+    const combined = pendingToPayload(folded, payload.session_summary);
+
     const existing = await loadState(projectDir);
     const now = new Date().toISOString();
-    const { state: merged, stats } = mergeState(existing, payload, now);
+    const { state: merged, stats } = mergeState(existing, combined, now);
     const { state: finalState, pruned } = pruneState(merged, projectDir);
 
     await saveState(projectDir, finalState);
+
+    // Mark the session cleanly closed and clear the pending buffer so the next
+    // session's startup recovery does not re-fold already-persisted data.
+    if (session) {
+      session.status = "closed";
+      session.pending = emptyPending();
+      delete session.recovery;
+      await writeSession(projectDir, session);
+    }
 
     const sizeKb = (finalState.meta.state_size_bytes / 1024).toFixed(1);
     const prunedNote = pruned ? " (state pruned to stay under the hard limit)" : "";
