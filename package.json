@@ -1,0 +1,64 @@
+{
+  "name": "zipmem-mcp",
+  "version": "0.1.0",
+  "description": "Local-first MCP server + CLI that gives terminal AI agents an endless semantic memory via Anchored Compacting, keeping the context window small.",
+  "type": "module",
+  "bin": {
+    "zipmem": "./dist/cli.js",
+    "zipmem-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src tests",
+    "format": "prettier --write \"{src,tests}/**/*.ts\"",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agent",
+    "memory",
+    "context-compression",
+    "context-window",
+    "claude",
+    "claude-code",
+    "anchored-compacting"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/zipmem-mcp.git"
+  },
+  "homepage": "https://github.com/your-org/zipmem-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/your-org/zipmem-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^2.1.0"
+  }
+}

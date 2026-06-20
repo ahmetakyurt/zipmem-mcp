@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Local editor/IDE
+.vscode/
+.idea/
+
+# zipmem local memory (this repo dog-foods zipmem; keep memory local by default)
+.zipmem/
