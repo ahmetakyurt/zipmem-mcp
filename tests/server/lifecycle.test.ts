@@ -84,7 +84,7 @@ describe("clean compaction folds and clears pending", () => {
 });
 
 describe("flushOnShutdownSync (catchable termination)", () => {
-  it("folds pending into state and marks the session interrupted", async () => {
+  it("marks the session interrupted WITHOUT folding (recovery does the fold)", async () => {
     await startSession();
     await checkpointHandler({
       project_dir: dir,
@@ -95,15 +95,23 @@ describe("flushOnShutdownSync (catchable termination)", () => {
 
     flushOnShutdownSync(dir, "SIGINT");
 
+    // The handler is minimal: state.json is untouched and pending is preserved.
     const state = await loadState(dir);
-    expect(state.anchors).toHaveLength(1);
-    expect(state.blueprints).toHaveLength(1);
+    expect(state.anchors).toHaveLength(0);
+    expect(state.blueprints).toHaveLength(0);
 
     const session = await readSession(dir);
     expect(session?.status).toBe("interrupted");
     expect(session?.reason).toBe("SIGINT");
-    expect(session?.recovery?.acknowledged).toBe(false);
-    expect(session?.recovery?.recovered_anchors).toBe(1);
+    expect(session?.pending.anchors).toHaveLength(1); // intact
+    expect(session?.recovery).toBeUndefined(); // recovery is set at startup, not here
+
+    // Authoritative fold happens at the next startup.
+    const recovery = runStartupRecovery(dir);
+    expect(recovery?.recovered_anchors).toBe(1);
+    const folded = await loadState(dir);
+    expect(folded.anchors).toHaveLength(1);
+    expect(folded.blueprints).toHaveLength(1);
   });
 
   it("is a no-op for an already-closed (cleanly compacted) session", async () => {

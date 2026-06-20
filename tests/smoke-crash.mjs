@@ -86,23 +86,34 @@ try {
 
   const statePath = path.join(projectDir, ".zipmem", "state.json");
   const sessionPath = path.join(projectDir, ".zipmem", "session.json");
-  const state = JSON.parse(readFileSync(statePath, "utf8"));
-  const session = JSON.parse(readFileSync(sessionPath, "utf8"));
+  // state.json may not exist yet — the minimal handler never writes it; only
+  // the next-startup recovery (or a clean compaction) creates it.
+  const readState = () =>
+    existsSync(statePath)
+      ? JSON.parse(readFileSync(statePath, "utf8"))
+      : { anchors: [], lessons: [], blueprints: [] };
+  const state1 = readState();
+  const session1 = JSON.parse(readFileSync(sessionPath, "utf8"));
 
   console.log(
-    `flushed state -> anchors=${state.anchors.length} lessons=${state.lessons.length}`,
+    `after hard exit -> state.anchors=${state1.anchors.length} (expect 0, handler is minimal)`,
   );
   console.log(
-    `session -> status=${session.status} reason=${session.reason} recovery.ack=${session.recovery?.acknowledged}`,
+    `session -> status=${session1.status} reason=${session1.reason} pending.anchors=${session1.pending.anchors.length}`,
   );
 
+  // Minimal handler: state.json untouched, session marked interrupted, pending preserved.
   const ok1 =
-    state.anchors.length === 1 &&
-    state.lessons.length === 1 &&
-    session.status === "interrupted";
-  if (!ok1) throw new Error("FAIL: pending was not flushed to state.json on hard exit");
+    state1.anchors.length === 0 &&
+    session1.status === "interrupted" &&
+    session1.pending.anchors.length === 1 &&
+    session1.pending.lessons.length === 1;
+  if (!ok1)
+    throw new Error(
+      "FAIL: handler should mark interrupted and preserve pending without folding",
+    );
 
-  // ---- Session 2: should surface the recovery banner ----
+  // ---- Session 2: startup recovery folds pending; load surfaces the banner ----
   const child2 = spawnServer();
   const c2 = makeClient(child2);
   await handshake(c2);
@@ -114,10 +125,22 @@ try {
   console.log("\n--- load_memory (session 2) ---\n" + text);
   child2.stdin.end();
 
-  const ok2 = text.includes("ZipMem recovery") && text.includes("src/feature.ts");
-  if (!ok2) throw new Error("FAIL: recovery banner not surfaced on next session");
+  const state2 = readState();
+  console.log(
+    `after recovery -> state.anchors=${state2.anchors.length} lessons=${state2.lessons.length}`,
+  );
 
-  console.log("\nPASS: hard-exit flush + next-session recovery verified.");
+  const ok2 =
+    text.includes("ZipMem recovery") &&
+    text.includes("src/feature.ts") &&
+    state2.anchors.length === 1 &&
+    state2.lessons.length === 1;
+  if (!ok2)
+    throw new Error("FAIL: next-session recovery did not fold pending / surface banner");
+
+  console.log(
+    "\nPASS: minimal interrupt marker + next-session recovery fold verified.",
+  );
 } finally {
   if (existsSync(projectDir)) rmSync(projectDir, { recursive: true, force: true });
 }

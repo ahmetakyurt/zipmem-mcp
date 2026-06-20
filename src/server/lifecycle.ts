@@ -1,6 +1,5 @@
 import {
   applyPendingToState,
-  emptyPending,
   gitChangedFilesSync,
   newActiveSession,
   pendingHasContent,
@@ -24,9 +23,13 @@ import {
  *   1. checkpoints are written to disk continuously (see core/session.ts), and
  *   2. the next server startup folds any leftover pending buffer into state.json
  *      and surfaces a recovery banner.
- * The signal/stdin/ppid handlers below are a best-effort enhancement: on a
- * catchable termination they synchronously flush the pending buffer into
- * state.json and record why the session ended.
+ * The signal/stdin/ppid handlers below are a best-effort enhancement, kept
+ * deliberately MINIMAL: on a catchable termination they do a single small
+ * atomic write to mark the session interrupted and record the reason. They do
+ * NOT fold into state.json or run git — heavy I/O during the narrow OS
+ * termination window risks a torn write. All authoritative folding (and
+ * git-changed-file capture) happens at the next calm startup in
+ * runStartupRecovery.
  */
 
 const ZERO_STATS = {
@@ -36,47 +39,21 @@ const ZERO_STATS = {
 } as Pick<MergeStats, "blueprintsAdded" | "anchorsAdded" | "lessonsAdded">;
 
 /**
- * Synchronously flush the live session on an abrupt exit: fold its pending
- * checkpoints into state.json, mark it interrupted, and stamp a recovery block
- * for the next session. Idempotent and exception-safe — never throws.
+ * Record an abrupt exit — deliberately MINIMAL. Marks the live session
+ * interrupted and stamps the reason, then performs a single atomic write. It
+ * intentionally leaves the pending buffer intact and does NOT touch state.json
+ * (no heavy disk I/O during the narrow OS termination window). The authoritative
+ * fold is done by {@link runStartupRecovery} at the next startup. Idempotent and
+ * exception-safe — never throws.
  */
 export function flushOnShutdownSync(projectDir: string, reason: string): void {
   try {
     const session = readSessionSync(projectDir);
     if (!session || session.status === "closed") return; // already clean
 
-    const files = gitChangedFilesSync(projectDir);
-    let stats = ZERO_STATS;
-
-    if (pendingHasContent(session.pending)) {
-      try {
-        const state = loadStateSync(projectDir);
-        const result = applyPendingToState(
-          state,
-          session.pending,
-          "(interrupted session)",
-        );
-        saveStateSync(projectDir, result.state);
-        stats = result.stats;
-      } catch {
-        // Leave pending intact for next-startup recovery if the flush fails.
-        return;
-      }
-    }
-
     session.status = "interrupted";
     session.reason = reason;
-    session.uncompacted_files = files;
-    session.recovery = {
-      from_session: session.session_id,
-      reason,
-      recovered_blueprints: stats.blueprintsAdded,
-      recovered_anchors: stats.anchorsAdded,
-      recovered_lessons: stats.lessonsAdded,
-      uncompacted_files: files,
-      acknowledged: false,
-    };
-    session.pending = emptyPending();
+    // Pending is left intact; next-startup recovery folds it into state.json.
     writeSessionSync(projectDir, session);
   } catch {
     // Best-effort: never let shutdown handling throw.
