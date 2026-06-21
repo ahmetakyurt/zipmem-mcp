@@ -147,7 +147,7 @@ Relying on the agent to gracefully call `zipmem_save_and_compact` on the way out
 
 > **Honest limitation:** a true hard kill (`SIGKILL`, `kill -9`, power loss) cannot be intercepted by *any* in-process handler — and semantic compaction can't run at death time anyway, because it requires the LLM. zipmem does **not** dump raw code or `git diff` into memory (that would violate Anchored Compacting). Instead, durability comes from **checkpoints already on disk** + **next-session recovery**, which together guarantee no *silent* loss: the worst case is "the last few un-checkpointed steps need redoing," and the next session is explicitly told what changed.
 
-The practical takeaway: **checkpoint as you go** (the injected directive tells the agent to, at the cadence set by your [checkpoint mode](#checkpoint-modes)), and abrupt exits become recoverable instead of catastrophic. If you run in `conservative` mode, remember that durability is on you — say `/checkpoint` at the points you don't want to lose.
+The practical takeaway: **checkpoint as you go** (the injected directive tells the agent to, at the cadence set by your [checkpoint mode](#checkpoint-modes)), and abrupt exits become recoverable instead of catastrophic. If you run in `conservative` mode, remember that durability is on you — say `checkpoint` at the points you don't want to lose.
 
 > `.zipmem/session.json` is runtime state and is always gitignored (via `.zipmem/.gitignore`), even in `--shared` mode — only `state.json` is shared.
 
@@ -215,7 +215,36 @@ This leaves `.gitignore` untouched so you can commit `.zipmem/state.json`.
 
 ## Why this saves thousands of tokens
 
-A single 200-line code block can cost ~2,000+ tokens every time it re-enters the window. One anchor costs ~20. Multiply across a day of dense work — dozens of code blocks, debugging transcripts, repeated file reads — and a session that would re-load tens of thousands of tokens of history instead loads a few hundred tokens of structured memory. Because the compaction is semantic (not just truncation), the agent loses none of the *decisions* — only the bulk.
+A single 200-line code block can cost ~2,000+ tokens every time it re-enters the window. One anchor costs ~20. A new session that would otherwise re-read tens of thousands of tokens of history to regain context instead loads a few hundred tokens of structured memory. Because the compaction is semantic (not just truncation), the agent loses none of the *decisions* — only the bulk.
+
+> **Be precise about *where* the saving happens.** zipmem does **not** shrink your live context window *within* a single chat — there it's a small (mostly cacheable) overhead. The payoff is at the **session boundary**: the *next* chat reloads compressed memory instead of re-deriving the project from scratch. So it's net-positive for long, multi-session work and net-negative for one-off short chats. See [`docs/token-economics.md`](./docs/token-economics.md) for a realistic per-stage and cross-session cost model.
+
+---
+
+## How ZipMem compares
+
+zipmem isn't the only way to give an agent memory. Here's where it fits — and what it trades away. (This is a comparison, not a claim of being strictly "better"; the right tool depends on your workflow.)
+
+| Approach | Persists across sessions | Token cost | Infra / API keys | Determinism | Main trade-off |
+| --- | --- | --- | --- | --- | --- |
+| **No memory** (re-read each session) | ❌ | Highest over time | None | — | Context rebuilt from zero every session |
+| **Paste old transcript** | ⚠️ manual | **Very high** | None | Low | Bloats the window — defeats the purpose |
+| **Manual `CLAUDE.md` notes** | ✅ but static | Very low | None | Medium | Hand-maintained, goes stale, no anchors, lossy |
+| **Claude Code `/compact`** | ❌ (within a session) | Low | None | Medium | Shrinks the *live* window only; not persistent; lossy |
+| **RAG / vector memory** (e.g. mem0, Letta/MemGPT) | ✅ | Medium (retrieval per query) | **Embeddings + DB/keys** | Low (fuzzy) | Infra overhead; can retrieve noise; non-deterministic |
+| **Whole codebase in context** | ❌ | Highest | None | High | Expensive and window-bound |
+| **zipmem** | ✅ | **Low** (mostly cacheable, bounded) | **None** (local, key-free) | **High** (deterministic) | One project at a time; no fuzzy semantic recall; relies on checkpoint discipline |
+
+**How to read this:** zipmem is **complementary to `/compact`**, not a competitor — `/compact` trims the live window *within* a session, zipmem carries *meaning* *across* sessions. Versus RAG/vector memories it gives you **zero infrastructure, no API keys, deterministic output, verbatim blueprints, and code anchors**; in exchange it gives up **fuzzy semantic retrieval breadth** and multi-project scope. Versus a hand-kept `CLAUDE.md` it's automatic, structured, and anchor-based; versus pasting transcripts it's incomparably cheaper.
+
+## Limitations
+
+Being honest about what zipmem does **not** do:
+
+- **One session per project at a time.** `session.json` is a single "current session" file and `state.json` uses read-modify-write without locking. Running **two `claude` sessions in the *same* project simultaneously** (e.g. two terminal tabs) will clobber `session.json` and can silently lose compactions through a race — with no error shown. **Different projects are fully isolated and safe.** Fixing same-project concurrency would require per-session files + locking; it's a known design boundary, not a bug.
+- **Within a single chat, zipmem is overhead — not savings.** The benefit is realized only when the *next* session reloads compressed memory. A one-off short chat pays a small net cost. (See [Why this saves tokens](#why-this-saves-thousands-of-tokens) and [`docs/token-economics.md`](./docs/token-economics.md).)
+- **Recovery depends on checkpoint discipline.** The directive instructs the agent to checkpoint, but can't *force* it. Work that was never checkpointed or compacted before a hard kill is lost — the server has no LLM to reconstruct it.
+- **No semantic compaction at death time.** A `SIGKILL` / power loss can't be intercepted, and compaction needs the LLM anyway. zipmem never writes raw code or `git diff` into memory — durability comes from on-disk checkpoints + next-session recovery, never from dumping the transcript.
 
 ---
 
