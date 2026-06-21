@@ -1,6 +1,6 @@
 {
   "name": "zipmem-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local-first MCP server + CLI that gives terminal AI agents an endless semantic memory via Anchored Compacting, keeping the context window small.",
   "type": "module",
   "bin": {
