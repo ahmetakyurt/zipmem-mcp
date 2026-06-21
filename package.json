@@ -37,15 +37,15 @@
     "claude-code",
     "anchored-compacting"
   ],
-  "author": "",
+  "author": "ahmetakyurt <ahmetakyurt2021@gmail.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/zipmem-mcp.git"
+    "url": "git+https://github.com/ahmetakyurt/zipmem-mcp.git"
   },
-  "homepage": "https://github.com/your-org/zipmem-mcp#readme",
+  "homepage": "https://github.com/ahmetakyurt/zipmem-mcp#readme",
   "bugs": {
-    "url": "https://github.com/your-org/zipmem-mcp/issues"
+    "url": "https://github.com/ahmetakyurt/zipmem-mcp/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
