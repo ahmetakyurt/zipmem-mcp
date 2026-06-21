@@ -43,6 +43,7 @@ export async function status(projectDir: string): Promise<void> {
   info("");
   info(`  Size       : ${sizeLabel}`);
   info(`  Mode       : ${state.meta.shared ? "shared (committed)" : "local (gitignored)"}`);
+  info(`  Checkpoint : ${c.cyan(state.meta.checkpoint_mode)}`);
   info(`  Created    : ${c.dim(state.created_at)}`);
   info(`  Updated    : ${c.dim(state.updated_at)}`);
 }

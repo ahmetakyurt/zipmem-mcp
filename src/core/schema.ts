@@ -11,6 +11,24 @@ import { z } from "zod";
 
 export const STATE_VERSION = 1 as const;
 
+/**
+ * How aggressively the agent is instructed to call `zipmem_checkpoint`:
+ *  - `conservative` — never self-checkpoint; only on an explicit user command.
+ *  - `balanced` — checkpoint at major milestones only (default).
+ *  - `aggressive` — checkpoint after every meaningful unit of work.
+ * This only shapes the injected directive (the agent's behaviour); the server
+ * itself treats every checkpoint identically.
+ */
+export const CheckpointMode = z.enum([
+  "conservative",
+  "balanced",
+  "aggressive",
+]);
+export type CheckpointMode = z.infer<typeof CheckpointMode>;
+
+/** The default checkpoint mode for a freshly-initialized project. */
+export const DEFAULT_CHECKPOINT_MODE: CheckpointMode = "balanced";
+
 /** Categories a blueprint can belong to. Preserved verbatim, never anchored. */
 export const BlueprintCategory = z.enum([
   "architecture",
@@ -71,6 +89,11 @@ export const StateMetaSchema = z.object({
   state_size_bytes: z.number().int().nonnegative(),
   /** When true, memory is intended to be committed and shared via git. */
   shared: z.boolean().default(false),
+  /**
+   * The checkpoint cadence the directive instructs the agent to follow.
+   * Defaulted so state files written before this field existed still validate.
+   */
+  checkpoint_mode: CheckpointMode.default("balanced"),
 });
 export type StateMeta = z.infer<typeof StateMetaSchema>;
 

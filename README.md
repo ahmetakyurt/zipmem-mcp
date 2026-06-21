@@ -56,7 +56,8 @@ That's it. `zipmem init`:
 
 - creates `.zipmem/state.json` (your memory store),
 - injects the Constitutional Directive into `CLAUDE.md` (or `memory.md`, or creates `CLAUDE.md`),
-- adds `.zipmem/` to `.gitignore` (keep memory local — see [Shared memory](#shared-vs-local-memory)).
+- adds `.zipmem/` to `.gitignore` (keep memory local — see [Shared memory](#shared-vs-local-memory)),
+- records a [checkpoint mode](#checkpoint-modes) (`balanced` by default; pass `--checkpoint=conservative|aggressive` to change it).
 
 From the next session on, the agent **loads memory automatically at the start** and **compacts automatically when you say goodbye or it nears its context limit**. You don't run anything by hand.
 
@@ -86,7 +87,7 @@ Session start ──► agent calls zipmem_load_memory ──► regains full co
       │
       │   ... work ...
       │
-Exit intent / context pressure ──► agent calls zipmem_save_and_compact
+"we're done" message / context pressure ──► agent calls zipmem_save_and_compact
                                          │
                                          ▼
                           validate → dedup-merge → prune → write .zipmem/state.json
@@ -97,10 +98,42 @@ Exit intent / context pressure ──► agent calls zipmem_save_and_compact
 | Tool | When the agent calls it | What it does |
 | --- | --- | --- |
 | **`zipmem_load_memory`** | First thing, every session | Returns blueprints, anchors, and lessons as compact text. Surfaces a recovery banner if the previous session ended abruptly. |
-| **`zipmem_checkpoint`** | Periodically, after each meaningful unit of work | Stages incremental progress durably (crash-safe) without finalizing the session. |
-| **`zipmem_save_and_compact`** | On "exit/quit/goodbye" or near the context limit | Folds staged checkpoints + the final delta into persistent memory and closes the session. |
+| **`zipmem_checkpoint`** | Depends on the [checkpoint mode](#checkpoint-modes) (every unit of work, only at milestones, or when you say `checkpoint`) | **Stages** progress into a crash-safe buffer (`session.json`) — intermediate, not final, never touches `state.json`. Called many times per session. |
+| **`zipmem_save_and_compact`** | When you signal the session is wrapping up **in a chat message** ("we're done", "that's all", "goodbye", or `save`), or when context nears its limit | **Finalizes**: folds the staged buffer + final delta into persistent memory (`state.json`), prunes, closes the session. Usually once at the end. |
 
 The tool *descriptions* are written so the agent knows **when and why** to call them without you prompting it.
+
+> **Heads-up about `exit` / `quit`:** these are Claude Code's own CLI commands — they close the terminal *instantly*, before the agent gets a turn, so they **do not** trigger `zipmem_save_and_compact`. To get a clean final save, send a normal chat message first ("we're done", "save", "goodbye"), let the agent compact, *then* quit. Otherwise durability falls back to your last [checkpoint](#crash-safety-hard-exits--ctrlc) + next-session recovery.
+
+### Checkpoint vs. save — the one-line version
+
+**Checkpoint** = cheap, frequent, "don't lose my progress" insurance (recovered only on the next session if you crash). **Save & compact** = the authoritative commit to long-term memory that a future `zipmem_load_memory` reads back. Many checkpoints during a session; one save at the end.
+
+---
+
+## Checkpoint modes
+
+`zipmem_checkpoint` is the main **cost ↔ safety** knob. Each checkpoint is agent-generated output, so frequent checkpoints mean more durability but more tokens. You pick the cadence at init time and it's baked into the injected directive (the server treats every checkpoint identically — only the *instruction to the agent* changes):
+
+```bash
+zipmem init --checkpoint=balanced     # default
+```
+
+| Mode | The agent is told to… | Best for |
+| --- | --- | --- |
+| **`aggressive`** | Checkpoint **after every meaningful unit of work** (a feature wired up, a bug fixed). Maximum durability against hard exits. | Long, high-stakes sessions where losing even a few steps hurts. |
+| **`balanced`** _(default)_ | Checkpoint **only at major milestones** — a big refactor finished, a critical bug resolved, a foundational decision made. | Most projects: low token overhead, still protects the work that matters. |
+| **`conservative`** | **Never persist on its own.** Memory is written only when *you* say so, via two plain words: say **`checkpoint`** → the agent stages progress (`zipmem_checkpoint`); say **`save`** → the agent does a full compaction (`zipmem_save_and_compact`). Either way it runs the tool immediately and replies with a one-line confirmation. | Token-tight workflows where you want full manual control. |
+
+> In `conservative` mode you stay in the driver's seat: say **`checkpoint`** for a quick crash-safe stage, or **`save`** to compact everything into long-term memory — no slash commands, just the plain word.
+
+**Changing modes later** — re-run `init` with a different value; it updates `meta.checkpoint_mode` in `state.json` and rewrites the directive block in place (re-running *without* `--checkpoint` leaves your stored mode untouched):
+
+```bash
+zipmem init --checkpoint=conservative   # switch an existing project to conservative
+```
+
+> In `aggressive` and `balanced`, the agent still calls `zipmem_save_and_compact` on its own when you signal you're done (in chat) or context nears the limit — modes only govern the *interim* checkpoint cadence. In `conservative`, **nothing is automatic**: the final save happens only when you say `save`.
 
 ---
 
@@ -114,7 +147,7 @@ Relying on the agent to gracefully call `zipmem_save_and_compact` on the way out
 
 > **Honest limitation:** a true hard kill (`SIGKILL`, `kill -9`, power loss) cannot be intercepted by *any* in-process handler — and semantic compaction can't run at death time anyway, because it requires the LLM. zipmem does **not** dump raw code or `git diff` into memory (that would violate Anchored Compacting). Instead, durability comes from **checkpoints already on disk** + **next-session recovery**, which together guarantee no *silent* loss: the worst case is "the last few un-checkpointed steps need redoing," and the next session is explicitly told what changed.
 
-The practical takeaway: **checkpoint as you go** (the injected directive tells the agent to), and abrupt exits become recoverable instead of catastrophic.
+The practical takeaway: **checkpoint as you go** (the injected directive tells the agent to, at the cadence set by your [checkpoint mode](#checkpoint-modes)), and abrupt exits become recoverable instead of catastrophic. If you run in `conservative` mode, remember that durability is on you — say `/checkpoint` at the points you don't want to lose.
 
 > `.zipmem/session.json` is runtime state and is always gitignored (via `.zipmem/.gitignore`), even in `--shared` mode — only `state.json` is shared.
 
@@ -123,11 +156,14 @@ The practical takeaway: **checkpoint as you go** (the injected directive tells t
 ## CLI
 
 ```bash
-zipmem init [--shared]   # set up .zipmem/ and inject the directive
-zipmem status            # summary: counts, size vs. limits, mode, timestamps
+zipmem init [--shared] [--checkpoint=<mode>]   # set up .zipmem/ and inject the directive
+                                               #   <mode>: conservative | balanced | aggressive
+zipmem status            # summary: counts, size vs. limits, mode, checkpoint mode, timestamps
 zipmem --version
 zipmem --help
 ```
+
+`--checkpoint` is validated — an unknown value errors out with the allowed set. See [Checkpoint modes](#checkpoint-modes) for what each does.
 
 ### `zipmem status`
 
@@ -142,6 +178,7 @@ ZipMem status — my-app
 
   Size       : 7.4KB
   Mode       : local (gitignored)
+  Checkpoint : balanced
   Created    : 2026-05-02T10:01:55.000Z
   Updated    : 2026-06-20T13:32:17.324Z
 ```
@@ -156,6 +193,7 @@ Everything lives in one validated JSON file at `.zipmem/state.json`:
 - **`anchors[]`** — `{ file_path, line_range, concept }` coordinate stand-ins for code.
 - **`lessons[]`** — distilled bug fixes and gotchas, so regressions don't recur.
 - **`session_log[]`** — an append-only audit trail of compactions.
+- **`meta`** — counters plus `shared` and `checkpoint_mode` (your chosen [checkpoint cadence](#checkpoint-modes)).
 
 **Merging** is deterministic: blueprints dedup by title+category (immutable ones are never overwritten unless explicitly superseded), overlapping anchors for a file union-merge with the newest concept winning, and duplicate lessons are skipped. Writes are **atomic** (temp file + rename) so a crash can never corrupt your memory.
 

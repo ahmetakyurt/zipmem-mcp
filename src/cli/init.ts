@@ -1,6 +1,13 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { createEmptyState, saveState, stateExists } from "../core/state.js";
+import { DEFAULT_CHECKPOINT_MODE } from "../core/schema.js";
+import type { CheckpointMode } from "../core/schema.js";
+import {
+  createEmptyState,
+  loadState,
+  saveState,
+  stateExists,
+} from "../core/state.js";
 import { resolveStatePath, resolveZipmemDir } from "../utils/paths.js";
 import {
   c,
@@ -15,6 +22,12 @@ import {
 
 export interface InitOptions {
   shared?: boolean;
+  /**
+   * Checkpoint cadence to bake into the directive and state. When omitted on a
+   * brand-new project the default applies; when omitted on an existing project
+   * the stored mode is left untouched.
+   */
+  checkpoint?: CheckpointMode;
 }
 
 /**
@@ -34,25 +47,38 @@ export async function init(
   info(c.bold(`zipmem init  ${c.dim(`(${resolved})`)}`));
   info("");
 
-  // 1. State file
+  // 1. State file. The effective checkpoint mode comes from (a) an explicit
+  //    --checkpoint flag, else (b) an existing state's stored mode, else (c) the
+  //    default. An explicit flag on an existing project updates the stored mode.
+  let checkpointMode: CheckpointMode;
   if (stateExists(resolved)) {
-    warn(
-      `State already exists at ${c.dim(resolveStatePath(resolved))} — left untouched.`,
-    );
+    const existing = await loadState(resolved);
+    if (opts.checkpoint && opts.checkpoint !== existing.meta.checkpoint_mode) {
+      existing.meta.checkpoint_mode = opts.checkpoint;
+      await saveState(resolved, existing);
+      checkpointMode = opts.checkpoint;
+      success(`Updated checkpoint mode to ${c.bold(checkpointMode)}.`);
+    } else {
+      checkpointMode = existing.meta.checkpoint_mode;
+      warn(
+        `State already exists at ${c.dim(resolveStatePath(resolved))} — left untouched ${c.dim(`(checkpoint mode: ${checkpointMode})`)}.`,
+      );
+    }
   } else {
+    checkpointMode = opts.checkpoint ?? DEFAULT_CHECKPOINT_MODE;
     const projectName = await inferProjectName(resolved);
-    const state = createEmptyState(projectName, shared);
+    const state = createEmptyState(projectName, shared, checkpointMode);
     await saveState(resolved, state);
     await writeInternalGitignore(resolveZipmemDir(resolved));
     success(
       `Created ${c.cyan(".zipmem/state.json")} for project ${c.bold(projectName)}${
         shared ? c.dim(" (shared)") : ""
-      }.`,
+      } ${c.dim(`(checkpoint mode: ${checkpointMode})`)}.`,
     );
   }
 
   // 2. Constitutional Directive
-  const dir = await injectDirective(resolved);
+  const dir = await injectDirective(resolved, checkpointMode);
   const rel = path.relative(resolved, dir.file) || dir.file;
   switch (dir.action) {
     case "created":

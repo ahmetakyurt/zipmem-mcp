@@ -73,6 +73,45 @@ describe("zipmem init", () => {
     const mem = await readFile(path.join(dir, "memory.md"), "utf8");
     expect(mem).toContain(DIRECTIVE_START);
   });
+
+  it("defaults the checkpoint mode to balanced", async () => {
+    await init(dir);
+    const state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.checkpoint_mode).toBe("balanced");
+    const claude = await readFile(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(claude).toContain("Checkpoint mode for this project: **balanced**");
+  });
+
+  it("persists an explicit checkpoint mode into state and the directive", async () => {
+    await init(dir, { checkpoint: "conservative" });
+    const state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.checkpoint_mode).toBe("conservative");
+    const claude = await readFile(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(claude).toContain("Checkpoint mode for this project: **conservative**");
+    expect(claude).toContain(
+      "Do NOT call `zipmem_checkpoint` or `zipmem_save_and_compact`",
+    );
+  });
+
+  it("updates an existing project's mode when re-run with a new --checkpoint", async () => {
+    await init(dir, { checkpoint: "balanced" });
+    await init(dir, { checkpoint: "aggressive" });
+
+    const state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.checkpoint_mode).toBe("aggressive");
+
+    const claude = await readFile(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(claude).toContain("Checkpoint mode for this project: **aggressive**");
+    // The stale balanced block is replaced in place, not duplicated.
+    expect(countOccurrences(claude, DIRECTIVE_START)).toBe(1);
+  });
+
+  it("leaves an existing mode untouched when re-run without --checkpoint", async () => {
+    await init(dir, { checkpoint: "aggressive" });
+    await init(dir);
+    const state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.checkpoint_mode).toBe("aggressive");
+  });
 });
 
 describe("zipmem status", () => {

@@ -2,10 +2,11 @@ import { existsSync } from "node:fs";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  CONSTITUTIONAL_DIRECTIVE,
   DIRECTIVE_END,
   DIRECTIVE_START,
+  getDirective,
 } from "../core/directive.js";
+import type { CheckpointMode } from "../core/schema.js";
 
 /* Minimal ANSI styling — no dependency. Disabled when NO_COLOR is set. */
 const useColor = !process.env.NO_COLOR && process.stdout.isTTY;
@@ -65,11 +66,16 @@ export type DirectiveResult =
 
 /**
  * Inject (or refresh) the Constitutional Directive into the project's agent
- * config file. Preference: existing CLAUDE.md > existing memory.md > create
- * CLAUDE.md. Never overwrites surrounding content; idempotent via the
- * zipmem:start / zipmem:end markers.
+ * config file for the given checkpoint mode. Preference: existing CLAUDE.md >
+ * existing memory.md > create CLAUDE.md. Never overwrites surrounding content;
+ * idempotent via the zipmem:start / zipmem:end markers — a stale block (old
+ * version or a different checkpoint mode) is replaced in place.
  */
-export async function injectDirective(projectDir: string): Promise<DirectiveResult> {
+export async function injectDirective(
+  projectDir: string,
+  mode: CheckpointMode,
+): Promise<DirectiveResult> {
+  const directive = getDirective(mode);
   const claudePath = path.join(projectDir, "CLAUDE.md");
   const memoryPath = path.join(projectDir, "memory.md");
 
@@ -80,7 +86,7 @@ export async function injectDirective(projectDir: string): Promise<DirectiveResu
       : claudePath;
 
   if (!existsSync(target)) {
-    await writeFile(target, `${CONSTITUTIONAL_DIRECTIVE}\n`, "utf8");
+    await writeFile(target, `${directive}\n`, "utf8");
     return { action: "created", file: target };
   }
 
@@ -92,20 +98,16 @@ export async function injectDirective(projectDir: string): Promise<DirectiveResu
     const before = current.slice(0, startIdx);
     const after = current.slice(endIdx + DIRECTIVE_END.length);
     const existingBlock = current.slice(startIdx, endIdx + DIRECTIVE_END.length);
-    if (existingBlock === CONSTITUTIONAL_DIRECTIVE) {
+    if (existingBlock === directive) {
       return { action: "skipped", file: target };
     }
     // Replace the stale block in place, preserving everything around it.
-    await writeFile(
-      target,
-      `${before}${CONSTITUTIONAL_DIRECTIVE}${after}`,
-      "utf8",
-    );
+    await writeFile(target, `${before}${directive}${after}`, "utf8");
     return { action: "updated", file: target };
   }
 
   const sep = current.endsWith("\n") ? "\n" : "\n\n";
-  await appendFile(target, `${sep}${CONSTITUTIONAL_DIRECTIVE}\n`, "utf8");
+  await appendFile(target, `${sep}${directive}\n`, "utf8");
   return { action: "appended", file: target };
 }
 

@@ -46,7 +46,7 @@ src/
     state.ts            # state.json load/save/merge/prune (+ sync variants for shutdown)
     compactor.ts        # deterministic helpers: line-range parse/union-merge, lesson dedup, ids
     format.ts           # render State -> compact agent-readable text (load_memory output)
-    directive.ts        # the Constitutional Directive string + idempotency markers
+    directive.ts        # mode-aware Constitutional Directive: getDirective(mode) + markers, DIRECTIVE_VERSION
     session.ts          # crash-recovery layer: session.json lifecycle, pending buffer, git capture
   server/
     index.ts            # registerTools(server) — wires all three tools
@@ -56,7 +56,7 @@ src/
       save-compact.ts   # zipmem_save_and_compact
       checkpoint.ts     # zipmem_checkpoint
   cli/
-    init.ts             # zipmem init [--shared]
+    init.ts             # zipmem init [--shared] [--checkpoint=<mode>]
     status.ts           # zipmem status
     helpers.ts          # ANSI, project-name inference, directive injection, .gitignore handling
   utils/
@@ -81,8 +81,10 @@ blueprints[]   { id, category(architecture|schema|decision|convention|dependency
 anchors[]      { file_path, line_range ("42-67"), concept, timestamp }
 lessons[]      { id, summary, detail, related_files[], timestamp }
 session_log[]  { session_id, started_at, ended_at, summary, anchors_added, lessons_added }
-meta           { total_compactions, total_sessions, state_size_bytes, shared }
+meta           { total_compactions, total_sessions, state_size_bytes, shared, checkpoint_mode }
 ```
+
+`meta.checkpoint_mode` ∈ `conservative | balanced | aggressive` (default `balanced`). It only shapes the **injected directive** (how often the agent is told to checkpoint); the server treats every checkpoint identically. Defaulted in the schema so state files written before the field existed still validate.
 
 ### `.zipmem/session.json` — ephemeral runtime/recovery state (schema in `core/session.ts`)
 ```
@@ -117,8 +119,8 @@ All writes are atomic: serialize → write `*.tmp` → `rename`. A crash mid-wri
 Tool names/descriptions are written to self-signal *when* to fire (agents read tool descriptions every loop).
 
 1. **`zipmem_load_memory`** — *Call first, every session.* Reads `state.json`, returns compact text (blueprints, anchors as `[path -> lines -> concept]`, lessons, recent sessions). Prepends a **⚠️ ZipMem recovery** banner if the previous session ended unclean. Params: `project_dir?`, `sections?`.
-2. **`zipmem_checkpoint`** — *Call periodically during work.* Stages incremental progress (blueprints/anchors/lessons + running summary) into `session.json.pending`. **Crash-safe but NOT finalization** — it never touches `state.json`. Params: `project_dir?`, `summary?`, `blueprints?`, `anchors?`, `lessons?`.
-3. **`zipmem_save_and_compact`** — *Call on exit intent or near the context limit.* Folds `session.pending` + the final payload into a single `mergeState`, prunes if needed, writes `state.json`, then marks the session `closed` and clears pending. Params: `project_dir?`, `session_summary` (required), `blueprints?`, `anchors?`, `lessons?`.
+2. **`zipmem_checkpoint`** — *Call during work, at a cadence set by `checkpoint_mode`* (every unit / milestones-only / never-unless-the-user-says `checkpoint`). Stages incremental progress (blueprints/anchors/lessons + running summary) into `session.json.pending`. **Crash-safe but NOT finalization** — it never touches `state.json`. Params: `project_dir?`, `summary?`, `blueprints?`, `anchors?`, `lessons?`.
+3. **`zipmem_save_and_compact`** — *Call when the session is wrapping up (an end-of-session intent expressed in a chat message — "we're done", "goodbye", or `save`) or near the context limit.* Folds `session.pending` + the final payload into a single `mergeState`, prunes if needed, writes `state.json`, then marks the session `closed` and clears pending. Params: `project_dir?`, `session_summary` (required), `blueprints?`, `anchors?`, `lessons?`. **Note:** the CLI's own `exit`/`quit` quit instantly and never reach the agent, so they cannot trigger this — see §7.
 
 **Project-dir resolution** (`utils/paths.ts`): explicit param → `CLAUDE_PROJECT_DIR` (set by Claude Code) → nearest `.zipmem/` ancestor → `cwd`. The server pins one project dir at startup for its lifecycle/recovery.
 
@@ -126,28 +128,34 @@ Tool names/descriptions are written to self-signal *when* to fire (agents read t
 
 ## 5. The Constitutional Directive (`core/directive.ts`)
 
-A markdown block injected into the project's `CLAUDE.md` (or `memory.md`) by `zipmem init`, wrapped in `<!-- zipmem:start -->` / `<!-- zipmem:end -->` markers and versioned by `DIRECTIVE_VERSION` (currently **2**). It instructs any model to:
+A markdown block injected into the project's `CLAUDE.md` (or `memory.md`) by `zipmem init`, wrapped in `<!-- zipmem:start -->` / `<!-- zipmem:end -->` markers and versioned by `DIRECTIVE_VERSION` (currently **5**). The block is **mode-aware**: `getDirective(mode)` builds it; only section 2's checkpoint-cadence paragraph varies between modes, everything else is shared. It instructs any model to:
 1. **On start:** always call `zipmem_load_memory` (don't ask).
-2. **During the session:** call `zipmem_checkpoint` periodically (after each meaningful unit of work) for crash-safety; watch context pressure; honor a recovery banner if present.
+2. **During the session (cadence depends on `checkpoint_mode`):**
+   - `aggressive` — call `zipmem_checkpoint` after each meaningful unit of work.
+   - `balanced` (default) — checkpoint only at major milestones (big refactor done, critical bug fixed, foundational decision made).
+   - `conservative` — never persist on its own; map two plain-word user commands to tools: "checkpoint" → `zipmem_checkpoint` (stage), "save" → `zipmem_save_and_compact` (full compaction). Run the matching tool immediately, no slash commands, then a one-line confirmation.
+   All modes still watch context pressure and honor a recovery banner if present.
 3. **Before exit / near limit:** call `zipmem_save_and_compact` with structured blueprints/anchors/lessons.
 4. **Preserve vs. anchor vs. distill vs. discard** rules (see §1).
 
-This directive is the only thing that makes agents compress correctly. Bump `DIRECTIVE_VERSION` whenever the body changes so `init` replaces stale blocks in place instead of appending duplicates.
+This directive is the only thing that makes agents compress correctly. Bump `DIRECTIVE_VERSION` whenever the body changes so `init` replaces stale blocks in place instead of appending duplicates. Because the rendered block embeds the active mode, switching modes (`zipmem init --checkpoint=…`) also rewrites the block in place via the same marker-replacement path.
 
 ---
 
 ## 6. CLI
 
 ```
-zipmem init [--shared]   # bootstrap: create .zipmem/state.json + .zipmem/.gitignore,
+zipmem init [--shared] [--checkpoint=<mode>]
+                         # bootstrap: create .zipmem/state.json + .zipmem/.gitignore,
                          #   inject directive into CLAUDE.md/memory.md (idempotent),
                          #   handle outer .gitignore, print the `claude mcp add` command
+                         #   <mode> ∈ conservative|balanced|aggressive (default balanced)
 zipmem status            # counts (blueprints/anchors/lessons/sessions/compactions),
-                         #   size vs. limits, mode (local|shared), timestamps
+                         #   size vs. limits, mode (local|shared), checkpoint mode, timestamps
 zipmem --version | --help
 ```
 
-`init` behavior: never overwrites existing content; if `CLAUDE.md` exists it appends the directive, else `memory.md`, else creates `CLAUDE.md`. **Default (local):** adds `.zipmem/` to the outer `.gitignore`. **`--shared`:** leaves the outer `.gitignore` untouched (so `state.json` is committed) and marks `meta.shared = true`. Register the server with: `claude mcp add zipmem-mcp -- npx zipmem-mcp`.
+`init` behavior: never overwrites existing content; if `CLAUDE.md` exists it appends the directive, else `memory.md`, else creates `CLAUDE.md`. **Default (local):** adds `.zipmem/` to the outer `.gitignore`. **`--shared`:** leaves the outer `.gitignore` untouched (so `state.json` is committed) and marks `meta.shared = true`. **`--checkpoint=<mode>`:** validated against `conservative|balanced|aggressive` (an unknown value errors out); a new project stores it in `meta.checkpoint_mode`, and re-running `init` with a *different* mode updates an existing project's stored mode + directive (re-running *without* the flag leaves the stored mode untouched). Register the server with: `claude mcp add zipmem-mcp -- npx zipmem-mcp`.
 
 ---
 
@@ -162,12 +170,15 @@ The whole design assumes the agent may NOT get to call `save_and_compact` (close
 ### Exit scenarios (what actually happens)
 | User action | OS signal | Handler runs? | Result |
 |---|---|---|---|
-| Types "exit"/"quit" | none (message to the **agent**) | n/a | Agent calls `save_and_compact` → **clean, full save** (best case — LLM still alive to compact) |
+| Says "we're done"/"goodbye"/`save` **in a chat message** | none (message reaches the **agent**) | n/a | Agent calls `save_and_compact` → **clean, full save** (best case — LLM still alive to compact) |
+| Types `exit` / `quit` (Claude Code CLI command) | stdin EOF / SIGHUP (terminal closes instantly) | yes (minimal) | Agent never gets a turn, so **no `save_and_compact`**; session marked `interrupted`; **last checkpointed** data recovered next startup |
 | Ctrl+C | SIGINT (catchable) | yes | session marked `interrupted`; **last checkpointed** data recovered next startup |
 | Close terminal (X) | SIGHUP / stdin EOF | yes | same as Ctrl+C |
 | Kill / Task Manager / force-quit | SIGKILL (uncatchable) | no | status stays `active`; next-startup recovery still folds last checkpoint |
 
-**The differentiator is not the signal — it's whether the agent checkpointed.** If the agent never called `checkpoint` or `save_and_compact`, there is nothing staged and that session's semantic memory is lost (the server cannot regenerate it without the LLM).
+**Key correction (verified empirically):** `exit`/`quit` are Claude Code's own REPL commands — they close the terminal *before* the agent gets a turn, so they do **not** produce a clean `save_and_compact`. Only an end-of-session intent sent as a normal chat message does. The reliable clean-save flow is: send "save" / "we're done" in chat → let the agent compact → *then* type `exit`.
+
+**The differentiator is not the signal — it's whether the agent persisted.** If the agent never called `checkpoint` or `save_and_compact`, there is nothing staged and that session's semantic memory is lost (the server cannot regenerate it without the LLM). In `conservative` mode this is entirely manual: say `checkpoint` to stage or `save` to compact.
 
 ---
 
@@ -181,7 +192,7 @@ The whole design assumes the agent may NOT get to call `save_and_compact` (close
 
 ## 9. Token-cost model
 
-- **Static, cacheable (window cost, low $):** the three tool definitions (~500–800 tok/turn) and the injected directive (~600–700 tok/session) sit in context but are prompt-cacheable.
+- **Static, cacheable (window cost, low $):** the three tool definitions (~1,300 tok/turn) and the injected directive (~790 tok/session for `balanced`; ~760 `aggressive`, ~950 `conservative`) sit in context but are prompt-cacheable.
 - **Generated, never cached (real per-token cost):** each `checkpoint` and the final `save_and_compact` are agent output. Frequent checkpoints grow the transcript by small deltas (not "re-reading everything").
 - **Read once per session:** `load_memory` returns the *compressed* memory.
 - **Zero at death:** no LLM runs during shutdown/recovery.
@@ -194,7 +205,7 @@ The whole design assumes the agent may NOT get to call `save_and_compact` (close
 ```bash
 npm install
 npm run build         # tsc -> dist/ (both bins emit here)
-npm test              # vitest, all tests (49)
+npm test              # vitest, all tests (58)
 npx vitest run tests/core/state.test.ts        # single file
 npx vitest run -t "merges overlapping anchors"  # single test by name
 npm run lint          # eslint (src + tests); tests/*.mjs are ignored
@@ -215,7 +226,7 @@ node tests/smoke-crash.mjs              # checkpoint -> hard exit -> next-sessio
 - **The shutdown/recovery path must never throw** — both `flushOnShutdownSync` and `runStartupRecovery` are try/catch-wrapped and idempotent; failure degrades to "next session recovers from `session.json`."
 - **Checkpoints are durability, not finalization.** `zipmem_checkpoint` writes only `session.json.pending`; the fold into `state.json` happens exactly once (in `save_and_compact` or recovery) to avoid double-counting `session_log`.
 - **Merge rules are precise** (see §3 / `mergeState`); changing any requires updating `tests/core/state.test.ts`.
-- **Directive injection is idempotent** via the markers + `DIRECTIVE_VERSION`; bump the version when the body changes.
+- **Directive injection is idempotent** via the markers + `DIRECTIVE_VERSION`; bump the version when the body changes. The rendered block also embeds the active `checkpoint_mode`, so equality (skip vs. replace) is computed against `getDirective(mode)`, not a single constant.
 
 ---
 

@@ -16,7 +16,9 @@ import {
 } from "./compactor.js";
 import {
   type Blueprint,
+  type CheckpointMode,
   type CompactionPayload,
+  DEFAULT_CHECKPOINT_MODE,
   type SessionRecord,
   type State,
   StateSchema,
@@ -42,7 +44,11 @@ export interface MergeStats {
 }
 
 /** A fresh, schema-valid empty state for a brand-new project. */
-export function createEmptyState(projectName: string, shared = false): State {
+export function createEmptyState(
+  projectName: string,
+  shared = false,
+  checkpointMode: CheckpointMode = DEFAULT_CHECKPOINT_MODE,
+): State {
   const now = new Date().toISOString();
   return {
     version: STATE_VERSION,
@@ -58,6 +64,7 @@ export function createEmptyState(projectName: string, shared = false): State {
       total_sessions: 0,
       state_size_bytes: 0,
       shared,
+      checkpoint_mode: checkpointMode,
     },
   };
 }
