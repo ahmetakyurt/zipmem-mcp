@@ -213,7 +213,7 @@ This leaves `.gitignore` untouched so you can commit `.zipmem/state.json`.
 
 ---
 
-## Why this saves thousands of tokens
+## Where the token savings come from
 
 A single 200-line code block can cost ~2,000+ tokens every time it re-enters the window. One anchor costs ~20. A new session that would otherwise re-read tens of thousands of tokens of history to regain context instead loads a few hundred tokens of structured memory. Because the compaction is semantic (not just truncation), the agent loses none of the *decisions* — only the bulk.
 
@@ -242,7 +242,7 @@ zipmem isn't the only way to give an agent memory. Here's where it fits — and 
 Being honest about what zipmem does **not** do:
 
 - **One session per project at a time.** `session.json` is a single "current session" file and `state.json` uses read-modify-write without locking. Running **two `claude` sessions in the *same* project simultaneously** (e.g. two terminal tabs) will clobber `session.json` and can silently lose compactions through a race — with no error shown. **Different projects are fully isolated and safe.** Fixing same-project concurrency would require per-session files + locking; it's a known design boundary, not a bug.
-- **Within a single chat, zipmem is overhead — not savings.** The benefit is realized only when the *next* session reloads compressed memory. A one-off short chat pays a small net cost. (See [Why this saves tokens](#why-this-saves-thousands-of-tokens) and [`docs/token-economics.md`](./docs/token-economics.md).)
+- **Within a single chat, zipmem is overhead — not savings.** The benefit is realized only when the *next* session reloads compressed memory. A one-off short chat pays a small net cost. (See [Where the token savings come from](#where-the-token-savings-come-from) and [`docs/token-economics.md`](./docs/token-economics.md).)
 - **Recovery depends on checkpoint discipline.** The directive instructs the agent to checkpoint, but can't *force* it. Work that was never checkpointed or compacted before a hard kill is lost — the server has no LLM to reconstruct it.
 - **No semantic compaction at death time.** A `SIGKILL` / power loss can't be intercepted, and compaction needs the LLM anyway. zipmem never writes raw code or `git diff` into memory — durability comes from on-disk checkpoints + next-session recovery, never from dumping the transcript.
 
