@@ -137,6 +137,7 @@ A markdown block injected into the project's `CLAUDE.md` (or `memory.md`) by `zi
    All modes still watch context pressure and honor a recovery banner if present.
 3. **Before exit / near limit:** call `zipmem_save_and_compact` with structured blueprints/anchors/lessons.
 4. **Preserve vs. anchor vs. distill vs. discard** rules (see §1).
+5. **Be terse** (added in v5): every checkpoint/compaction is paid-per-token agent output, so each `concept`/`summary` stays one line, `detail` one–two sentences, and only genuinely new/changed `blueprints` are resent — density over volume keeps the next session's reload cheap.
 
 This directive is the only thing that makes agents compress correctly. Bump `DIRECTIVE_VERSION` whenever the body changes so `init` replaces stale blocks in place instead of appending duplicates. Because the rendered block embeds the active mode, switching modes (`zipmem init --checkpoint=…`) also rewrites the block in place via the same marker-replacement path.
 
@@ -197,6 +198,8 @@ The whole design assumes the agent may NOT get to call `save_and_compact` (close
 - **Read once per session:** `load_memory` returns the *compressed* memory.
 - **Zero at death:** no LLM runs during shutdown/recovery.
 - Net: a bounded, mostly-cacheable overhead now in exchange for avoiding an unbounded raw-history re-read in the next session. Strongly net-positive for long/multi-session work; pure overhead for one-off short chats. Checkpoint cadence (set in the directive) is the main cost/durability knob.
+
+See `docs/token-economics.md` for a detailed, assumption-stated per-stage and cross-session cost model (cost by mode × chat length, cross-session savings, competitor comparison).
 
 ---
 
