@@ -125,6 +125,8 @@ zipmem init --checkpoint=balanced     # default
 | **`balanced`** _(default)_ | Checkpoint **only at major milestones** — a big refactor finished, a critical bug resolved, a foundational decision made. | Most projects: low token overhead, still protects the work that matters. |
 | **`conservative`** | **Never persist on its own.** Memory is written only when *you* say so, via two plain words: say **`checkpoint`** → the agent stages progress (`zipmem_checkpoint`); say **`save`** → the agent does a full compaction (`zipmem_save_and_compact`). Either way it runs the tool immediately and replies with a one-line confirmation. | Token-tight workflows where you want full manual control. |
 
+> **Modes are instructions, not guarantees.** The cadence lives in a prompt directive, not server code — the agent *usually* follows it but can't be *forced* to. In `aggressive` mode it may occasionally finish a unit of work without firing an interim `zipmem_checkpoint`, or ask before it saves rather than acting silently. That's an accepted trade-off: a missed checkpoint degrades gracefully via [crash safety](#crash-safety-hard-exits--ctrlc), and you can always force a write yourself by saying `checkpoint` or `save`.
+
 > In `conservative` mode you stay in the driver's seat: say **`checkpoint`** for a quick crash-safe stage, or **`save`** to compact everything into long-term memory — no slash commands, just the plain word.
 
 **Changing modes later** — re-run `init` with a different value; it updates `meta.checkpoint_mode` in `state.json` and rewrites the directive block in place (re-running *without* `--checkpoint` leaves your stored mode untouched):
