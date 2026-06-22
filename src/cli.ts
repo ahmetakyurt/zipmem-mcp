@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   switch (command) {
     case "init": {
       const checkpoint = parseCheckpointMode(values.checkpoint);
-      await init(process.cwd(), { shared: values.shared ?? false, checkpoint });
+      await init(process.cwd(), { shared: values.shared, checkpoint });
       break;
     }
     case "status":

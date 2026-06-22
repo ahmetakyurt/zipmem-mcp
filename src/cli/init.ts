@@ -41,30 +41,45 @@ export async function init(
   projectDir: string,
   opts: InitOptions = {},
 ): Promise<void> {
-  const shared = opts.shared ?? false;
   const resolved = path.resolve(projectDir);
 
   info(c.bold(`zipmem init  ${c.dim(`(${resolved})`)}`));
   info("");
 
-  // 1. State file. The effective checkpoint mode comes from (a) an explicit
-  //    --checkpoint flag, else (b) an existing state's stored mode, else (c) the
-  //    default. An explicit flag on an existing project updates the stored mode.
+  // 1. State file. The effective checkpoint mode and shared flag come from (a)
+  //    an explicit flag, else (b) an existing state's stored value, else (c) the
+  //    default. An explicit flag on an existing project updates the stored value.
   let checkpointMode: CheckpointMode;
+  let shared: boolean;
   if (stateExists(resolved)) {
     const existing = await loadState(resolved);
+    let changed = false;
+
     if (opts.checkpoint && opts.checkpoint !== existing.meta.checkpoint_mode) {
       existing.meta.checkpoint_mode = opts.checkpoint;
+      changed = true;
+      success(`Updated checkpoint mode to ${c.bold(opts.checkpoint)}.`);
+    }
+    // `--shared` can only flip an existing project ON — there is no `--local`
+    // flag, so omitting it leaves the stored value untouched.
+    if (opts.shared && !existing.meta.shared) {
+      existing.meta.shared = true;
+      changed = true;
+      success(`Switched to ${c.bold("shared")} mode — memory will be committed.`);
+    }
+
+    if (changed) {
       await saveState(resolved, existing);
-      checkpointMode = opts.checkpoint;
-      success(`Updated checkpoint mode to ${c.bold(checkpointMode)}.`);
     } else {
-      checkpointMode = existing.meta.checkpoint_mode;
       warn(
-        `State already exists at ${c.dim(resolveStatePath(resolved))} — left untouched ${c.dim(`(checkpoint mode: ${checkpointMode})`)}.`,
+        `State already exists at ${c.dim(resolveStatePath(resolved))} — left untouched ${c.dim(`(checkpoint mode: ${existing.meta.checkpoint_mode})`)}.`,
       );
     }
+
+    checkpointMode = existing.meta.checkpoint_mode;
+    shared = existing.meta.shared;
   } else {
+    shared = opts.shared ?? false;
     checkpointMode = opts.checkpoint ?? DEFAULT_CHECKPOINT_MODE;
     const projectName = await inferProjectName(resolved);
     const state = createEmptyState(projectName, shared, checkpointMode);
@@ -101,12 +116,17 @@ export async function init(
     case "added":
       success(`Added ${c.cyan(".zipmem/")} to .gitignore (local memory).`);
       break;
+    case "created":
+      success(
+        `Created ${c.cyan(".gitignore")} with ${c.cyan(".zipmem/")} (local memory).`,
+      );
+      break;
     case "present":
       info(`${c.dim("•")} ${c.cyan(".zipmem/")} already in .gitignore.`);
       break;
     case "none":
-      warn(
-        `No .gitignore found. Add ${c.cyan(".zipmem/")} yourself to keep memory local, or re-run with ${c.cyan("--shared")} to commit it.`,
+      info(
+        `${c.dim("•")} Not a git repo — skipped .gitignore. After ${c.cyan("git init")}, re-run ${c.cyan("zipmem init")} to keep ${c.cyan(".zipmem/")} local, or use ${c.cyan("--shared")} to commit memory.`,
       );
       break;
     case "shared-skip":

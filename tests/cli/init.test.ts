@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -56,6 +56,18 @@ describe("zipmem init", () => {
     expect(gi).toContain(".zipmem/");
   });
 
+  it("creates a .gitignore in a git repo when none exists", async () => {
+    await mkdir(path.join(dir, ".git"));
+    await init(dir);
+    const gi = await readFile(path.join(dir, ".gitignore"), "utf8");
+    expect(gi).toContain(".zipmem/");
+  });
+
+  it("does not create a .gitignore when the project is not a git repo", async () => {
+    await init(dir);
+    expect(existsSync(path.join(dir, ".gitignore"))).toBe(false);
+  });
+
   it("--shared leaves .gitignore untouched and marks state shared", async () => {
     await writeFile(path.join(dir, ".gitignore"), "node_modules/\n", "utf8");
     await init(dir, { shared: true });
@@ -64,6 +76,31 @@ describe("zipmem init", () => {
 
     const state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
     expect(state.meta.shared).toBe(true);
+  });
+
+  it("re-running with --shared flips an existing local project to shared", async () => {
+    await init(dir);
+    let state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.shared).toBe(false);
+
+    await init(dir, { shared: true });
+    state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.shared).toBe(true);
+  });
+
+  it("re-running without --shared leaves a shared project untouched", async () => {
+    await init(dir, { shared: true });
+    await init(dir);
+    const state = JSON.parse(await readFile(resolveStatePath(dir), "utf8"));
+    expect(state.meta.shared).toBe(true);
+  });
+
+  it("does not re-add .zipmem/ to .gitignore for an existing shared project", async () => {
+    await writeFile(path.join(dir, ".gitignore"), "node_modules/\n", "utf8");
+    await init(dir, { shared: true });
+    await init(dir); // no flag: must honor the stored shared mode, not local
+    const gi = await readFile(path.join(dir, ".gitignore"), "utf8");
+    expect(gi).not.toContain(".zipmem/");
   });
 
   it("prefers memory.md when CLAUDE.md is absent", async () => {

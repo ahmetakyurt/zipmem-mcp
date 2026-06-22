@@ -113,6 +113,7 @@ export async function injectDirective(
 
 export type GitignoreResult =
   | { action: "added"; file: string }
+  | { action: "created"; file: string }
   | { action: "present"; file: string }
   | { action: "none" }
   | { action: "shared-skip" };
@@ -131,6 +132,16 @@ export async function ensureGitignore(
 
   const gitignorePath = path.join(projectDir, ".gitignore");
   if (!existsSync(gitignorePath)) {
+    // Only create a .gitignore when this is actually a git repo — otherwise
+    // there is nothing to ignore and leaving a stray file would be presumptuous.
+    if (existsSync(path.join(projectDir, ".git"))) {
+      await writeFile(
+        gitignorePath,
+        `# zipmem local memory\n${IGNORE_LINE}\n`,
+        "utf8",
+      );
+      return { action: "created", file: gitignorePath };
+    }
     return { action: "none" };
   }
 
