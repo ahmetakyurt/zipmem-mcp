@@ -156,7 +156,7 @@ zipmem status            # counts (blueprints/anchors/lessons/sessions/compactio
 zipmem --version | --help
 ```
 
-`init` behavior: never overwrites existing content; if `CLAUDE.md` exists it appends the directive, else `memory.md`, else creates `CLAUDE.md`. **Default (local):** adds `.zipmem/` to the outer `.gitignore`. **`--shared`:** leaves the outer `.gitignore` untouched (so `state.json` is committed) and marks `meta.shared = true`. **`--checkpoint=<mode>`:** validated against `conservative|balanced|aggressive` (an unknown value errors out); a new project stores it in `meta.checkpoint_mode`, and re-running `init` with a *different* mode updates an existing project's stored mode + directive (re-running *without* the flag leaves the stored mode untouched). Register the server with: `claude mcp add zipmem-mcp -- npx zipmem-mcp`.
+`init` behavior: never overwrites existing content; if `CLAUDE.md` exists it appends the directive, else `memory.md`, else creates `CLAUDE.md`. **Default (local):** adds `.zipmem/` to the outer `.gitignore` (appending to an existing one, or creating a `.gitignore` if the project is a git repo but has none; if it is not a git repo, it only prints a hint). **`--shared`:** leaves the outer `.gitignore` untouched (so `state.json` is committed) and marks `meta.shared = true`; re-running with `--shared` on an existing **local** project flips it to shared (turn-on only — there is no `--local` flag, and omitting `--shared` leaves the stored value untouched). The effective shared flag for `.gitignore` handling is read from the stored state, so re-running `init` on a shared project never re-adds `.zipmem/` to `.gitignore`. **`--checkpoint=<mode>`:** validated against `conservative|balanced|aggressive` (an unknown value errors out); a new project stores it in `meta.checkpoint_mode`, and re-running `init` with a *different* mode updates an existing project's stored mode + directive (re-running *without* the flag leaves the stored mode untouched). Register the server with: `claude mcp add zipmem-mcp -- npx zipmem-mcp`.
 
 ---
 
@@ -175,7 +175,8 @@ The whole design assumes the agent may NOT get to call `save_and_compact` (close
 | Types `exit` / `quit` (Claude Code CLI command) | stdin EOF / SIGHUP (terminal closes instantly) | yes (minimal) | Agent never gets a turn, so **no `save_and_compact`**; session marked `interrupted`; **last checkpointed** data recovered next startup |
 | Ctrl+C | SIGINT (catchable) | yes | session marked `interrupted`; **last checkpointed** data recovered next startup |
 | Close terminal (X) | SIGHUP / stdin EOF | yes | same as Ctrl+C |
-| Kill / Task Manager / force-quit | SIGKILL (uncatchable) | no | status stays `active`; next-startup recovery still folds last checkpoint |
+| Force-quit the `claude` parent (Task Manager / kill) | parent dies → child sees stdin EOF/close or the ppid probe fails | yes (stdin-EOF / watchdog) | session marked `interrupted`; **last checkpointed** data recovered next startup |
+| Hard-kill the MCP server process itself | SIGKILL (uncatchable) | no | status stays `active`; next-startup recovery still folds last checkpoint |
 
 **Key correction (verified empirically):** `exit`/`quit` are Claude Code's own REPL commands — they close the terminal *before* the agent gets a turn, so they do **not** produce a clean `save_and_compact`. Only an end-of-session intent sent as a normal chat message does. The reliable clean-save flow is: send "save" / "we're done" in chat → let the agent compact → *then* type `exit`.
 
