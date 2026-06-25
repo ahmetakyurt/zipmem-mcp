@@ -6,6 +6,8 @@
 
 No cloud. No API keys. No AI calls on the server side. Your memory lives in a single human-readable JSON file under `.zipmem/`.
 
+![ZipMem demo — a Claude Code session saving and compacting its memory](./zipmem-demo.gif)
+
 ---
 
 ## The problem

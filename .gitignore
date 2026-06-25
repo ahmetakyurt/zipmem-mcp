@@ -13,3 +13,8 @@ coverage/
 
 # zipmem local memory (this repo dog-foods zipmem; keep memory local by default)
 .zipmem/
+
+# Demo source/working files — only the published zipmem-demo.gif is committed
+zipmem-video.mp4
+Enhancer-Ultra HD-zipmem-video.mp4
+zipmem-demo.mp4
