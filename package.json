@@ -4,8 +4,8 @@
   "description": "Local-first MCP server + CLI that gives terminal AI agents an endless semantic memory via Anchored Compacting, keeping the context window small.",
   "type": "module",
   "bin": {
-    "zipmem": "./dist/cli.js",
-    "zipmem-mcp": "./dist/index.js"
+    "zipmem": "dist/cli.js",
+    "zipmem-mcp": "dist/index.js"
   },
   "files": [
     "dist",
