@@ -4,6 +4,10 @@ coverage/
 *.log
 .DS_Store
 
+# Secrets / local env (never commit — contains API keys)
+.env
+.env.*
+
 # Local editor/IDE
 .vscode/
 .idea/
