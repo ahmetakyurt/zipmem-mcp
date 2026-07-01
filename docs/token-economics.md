@@ -1,42 +1,42 @@
 # ZipMem — Token Economics and Efficiency Analysis
 
-> Purpose: to model, realistically and objectively, **how many tokens ZipMem spends at
-> each stage** while working on a project, **how much it saves across session boundaries**
-> in return, and how that changes across different `checkpoint_mode` settings and different
-> chat lengths.
+> **What this document is:** a realistic, stated-assumption model of *where* ZipMem spends
+> tokens, *where* it saves them, and how that changes with `checkpoint_mode` and chat length.
+> It exists to set honest expectations — ZipMem is not a universal win, and this page explains
+> exactly when it pays off and when it doesn't.
 >
-> Every number in this document is a **stated-assumption model** (measurement + reasonable
-> estimate) and should be read with a ±30% margin of error. Source: actual sizes measured
-> via `src/core/directive.ts`, `src/core/format.ts`, `src/server/tools/*.ts` plus a token model.
+> **These numbers are estimates and will change.** Every figure below is a model (measurement +
+> reasonable assumption), not a billed invoice, and should be read with a ±30% margin. They
+> depend on the tokenizer, the active model, prompt-cache behavior, and the current
+> implementation of `src/core/directive.ts`, `src/core/format.ts`, and `src/server/tools/*.ts`.
+> As those evolve, the numbers here will drift; treat the *shape* of the argument as the durable
+> part, not the exact values. To measure your own case, compare against Claude Code's token
+> counters (`/cost`) over a few real sessions.
 
 ---
 
-## 0. TL;DR — First, the key question: "Where does the saving happen?"
+## 0. TL;DR — Where does the saving actually happen?
 
-**The user's thesis is correct — I confirm it with one small correction:**
+**ZipMem does not save tokens within a single chat.** On the contrary, within one session it
+**net *adds* a small number of tokens** (the directive + tool definitions + checkpoint/save
+outputs). It does not shrink a session's live context window — that is not its job.
 
-> "Our project does not save tokens within a chat; it provides memory most efficiently across
-> session boundaries."
+**The saving is realized at the session boundary.** When a *new* chat is opened, instead of
+re-reading files from scratch and re-deriving the architecture, the agent loads the compressed
+memory in one shot via `zipmem_load_memory`.
 
-✅ **Correct.** ZipMem **does not save tokens within a single chat/session** — on the contrary
-it **net *adds* a small number of tokens** (directive + tool definitions + checkpoint/save
-outputs). It does not shrink a session's live context window; that is not its job. The saving
-is born entirely **at the session boundary**: **when a new chat is opened**, instead of reading
-files from scratch and re-deriving the architecture, it loads the **compressed memory in one
-shot**.
+There are two *indirect* in-session effects, but they are a side effect, not the core mechanism:
 
-🔧 **Correction/nuance:** Saying "no benefit within a chat at all" is not quite right. There are
-two indirect in-session effects, but they are a **side effect, not the core mechanism**:
-1. The directive steers the agent toward producing an **anchor** (file + line coordinate)
-   instead of pasting a code block → in long sessions the window bloats a little more slowly.
-2. Checkpoint discipline pushes the agent to regularly summarize "what I did" → this provides
-   natural hygiene as well.
+1. The directive steers the agent toward emitting an **anchor** (file + line coordinate) instead
+   of pasting a raw code block, so in long sessions the window bloats a little more slowly.
+2. Checkpoint discipline nudges the agent to periodically summarize "what I did", which is a
+   natural hygiene benefit.
 
-But these are not the *source* of the saving. **The core value = avoiding the cross-session
-context re-acquisition cost.**
+Neither is the *source* of the saving. **The core value is avoiding cross-session context
+re-acquisition cost.**
 
-**In conclusion:**
-- **Short, one-off chats** → ZipMem is a **net loss** (pure overhead). Don't use it.
+**Bottom line:**
+- **Short, one-off chats** → net loss (pure overhead). Don't use ZipMem for these.
 - **Long and/or multi-session projects** → net positive; the saving percentage grows as the
   project matures.
 
@@ -52,17 +52,14 @@ context re-acquisition cost.**
 | Generated tokens | **Never cached** | This is the real incremental cost |
 | "Memory-less re-acquisition" | The most uncertain variable | A range is given; the midpoint is used |
 
-### 1.1 Measured static sizes (real)
+### 1.1 Measured static sizes
 
-| Component | Measurement | Tokens (≈) | Cache? |
+| Component | Measurement | Tokens (≈) | Cached? |
 |---|---|---|---|
-| Directive body (balanced) | 3,152 characters | **~790** | ✅ in CLAUDE.md, once per session |
+| Directive body (balanced) | ~3,150 characters | **~790** | ✅ in CLAUDE.md, once per session |
 | Directive (conservative) | longer | ~950 | ✅ |
 | Directive (aggressive) | shorter | ~760 | ✅ |
 | 3 tool definitions (name + description + JSON schema) | estimated from measurement | **~1,300/turn** | ✅ every turn, cached |
-
-> Note: CLAUDE.md §9 says the directive is "~600–700 tokens"; the actual measurement is
-> **~790 (balanced)**. It was slightly underestimated — this document uses the real value.
 
 ### 1.2 Generated (uncached) costs
 
@@ -74,7 +71,7 @@ context re-acquisition cost.**
 
 ---
 
-## 2. Stage-by-stage token consumption (short list)
+## 2. Stage-by-stage token consumption
 
 Every stage ZipMem touches in a single session:
 
@@ -94,7 +91,7 @@ The real incremental cost = `load (1,500)` + `N × checkpoint (250)` + `save (50
 
 ## 3. Cost by chat length (mode × length)
 
-Checkpoint count by mode (objective estimate): aggressive ≈ 1 per ~8k tokens of work;
+Checkpoint count by mode (modeled estimate): aggressive ≈ 1 per ~8k tokens of work;
 balanced ≈ 1 per ~33k (milestones only); conservative ≈ only when the user says
 "checkpoint"/"save".
 
@@ -123,19 +120,18 @@ balanced ≈ 1 per ~33k (milestones only); conservative ≈ only when the user s
 | 200k | 4.0% | 1.8% | 1.3% |
 | 300k | 3.7% | 1.4% | **0.9%** |
 
-> **Reading:** This table is ZipMem's **pure in-session cost** (not saving). As shown, the ratio
-> is high for small chats (30k + aggressive = 10% extra) and drops as the chat grows. This
-> confirms the "extra consumption in short chats" thesis. Because the static ~2,100 tokens are
-> cached, the billed impact is below these figures; the table gives the upper bound on window
-> occupation.
+> **Reading:** This table is ZipMem's **pure in-session cost** (not saving). The ratio is high
+> for small chats (30k + aggressive = 10% extra) and drops as the chat grows. This is the
+> "extra consumption in short chats" effect. Because the static ~2,100 tokens are cached, the
+> billed impact is below these figures; the table gives the upper bound on window occupation.
 
 ---
 
 ## 4. Saving when a new chat is opened (the core benefit)
 
-The crucial part. A **memory-less** agent re-reads files / re-derives the architecture to
-re-acquire context in a new session. A **ZipMem** agent instead pulls the compressed memory via
-`load_memory` and opens only the files it needs via anchors.
+A **memory-less** agent re-reads files and re-derives the architecture to re-acquire context in
+a new session. A **ZipMem** agent instead pulls the compressed memory via `load_memory` and
+opens only the files it needs via anchors.
 
 Re-acquisition cost correlates with project maturity (≈ accumulated work):
 
@@ -159,8 +155,8 @@ scratch → the more ZipMem saves.
 
 Realistic scenario: a project spans multiple sessions. Say each session does ~40k tokens of
 productive work; the project reaches ~200k of productive work over 5 sessions. "Productive
-work" tokens are identical on both sides — the difference is in the **overhead vs.
-re-acquisition** delta.
+work" tokens are identical on both sides — the difference is the **overhead vs. re-acquisition**
+delta.
 
 ### 5.1 balanced mode, 5-session project (~200k productive work)
 
@@ -193,18 +189,18 @@ re-acquisition** delta.
 
 > **Interpretation:** In a multi-session mature project, **conservative and balanced** are by
 > far the most efficient. **aggressive** mode's extra checkpoints eat about half the saving —
-> choose it only in "high crash risk, can't afford loss" scenarios. **The default `balanced`
-> is chosen correctly.**
+> choose it only when crash risk is high and losing recent work is unacceptable. This is why the
+> default is `balanced`.
 
 ---
 
-## 6. Statistical summary (one-sentence formula for the user)
+## 6. Summary formula
 
 > **ZipMem costs ~1–10% *extra* tokens in a single short chat (pure overhead); but as a project
 > spans multiple sessions and matures, the net saving turns positive and grows: ~6–15% at ~200k
-> of accumulated work, and up to ~20–30% net token saving on ~300k+ and more mature projects.
-> The saving depends less on chat length and more on how many times a new session is opened and
-> how mature the project is.**
+> of accumulated work, and up to ~20–30% on ~300k+ and more mature projects. The saving depends
+> less on chat length and more on how many times a new session is opened and how mature the
+> project is.**
 
 Net saving band, as a short table:
 
@@ -241,54 +237,60 @@ and anchor-based; versus pasting transcripts it's incomparably cheaper.
 
 ---
 
-## 8. Improving efficiency — prompt/cost levers
+## 8. Improving efficiency — cost levers
 
-### 8.1 Myth-busting first: shortening static blocks yields **small** gains
-The directive (~790) and tool definitions (~1,300) are **cached** → their billed impact is
-already low. Shortening them mostly reduces **window occupation**, and the real token bill only
-a little. Moreover, the directive's detail is what makes **weaker models follow the protocol** —
-aggressive shortening can break compliance. So: trim moderately, don't overdo it.
+### 8.1 Shortening static blocks yields *small* gains
+The directive (~790) and tool definitions (~1,300) are **cached**, so their billed impact is
+already low. Shortening them mostly reduces **window occupation**, not the real token bill.
+Moreover, the directive's detail is part of what makes **weaker models follow the protocol**, so
+aggressive shortening can hurt compliance. Trim moderately, not aggressively.
 
-### 8.2 The real levers (uncached, real tokens):
+### 8.2 The real levers (uncached, real tokens)
 
 1. **Checkpoint cadence (the biggest lever).** aggressive mode can eat half the saving
-   (see §5.3). The `balanced` default is right; recommend `aggressive` only at high crash risk.
+   (see §5.3). The `balanced` default is the general recommendation; `aggressive` fits high
+   crash-risk work only.
 2. **`load_memory` output size.** As memory approaches the soft limit (100KB), restore cost
-   rises. Suggestion: **lazy/staged loading** — by default return only `blueprints + lessons`,
-   and `anchors` on demand. The `sections` parameter already exists; making the default a
-   "summary" instead of "all" could be considered.
-3. **Token budget for `load_memory`.** Placing a soft upper bound on the output (e.g. the newest
-   N blueprints/anchors + "use sections for more") keeps restore constant on large projects.
-4. **Checkpoint payload discipline.** Summaries must stay one line; `format.ts` is already terse
-   — keep this explicit in the directive too ("running summary = one line").
+   rises. Lazy/staged loading (return `blueprints + lessons` by default, `anchors` on demand)
+   keeps restore cheap on large projects. The `sections` parameter already supports selective
+   loading.
+3. **Token budget for `load_memory`.** A soft upper bound on the output (e.g. the newest N
+   blueprints/anchors + "use `sections` for more") keeps restore roughly constant on large
+   projects.
+4. **Checkpoint payload discipline.** Summaries should stay one line; the directive already
+   instructs terseness, and keeping running summaries to a single line matters most here.
 
-### 8.3 Concrete, low-risk improvement suggestions
-- [ ] **A terser directive variant for strong models** (e.g. ~790 → ~550 tokens); optional
-      `--directive=lean` at `init`. Cuts window occupation by ~30%.
-- [ ] **Anchor lazy-load:** `load_memory` default is blueprints+lessons; anchors a separate call.
-- [ ] **`load_memory` token ceiling** + a "truncated, use sections" note.
-- [ ] Update the "~600–700 tokens" figure in CLAUDE.md §9 to **~790** (accuracy).
-- [ ] Shorten tool descriptions by ~15% (preserving the signal) — a window-occupation gain.
+### 8.3 Possible future optimizations
 
-> **Caution:** None of these levers create "saving within a single chat"; they all reduce either
-> window occupation or per-session overhead. The core benefit is still cross-session.
+These are directions, not commitments — noted here so the reasoning is on the record:
+
+- A terser directive variant for strong models (e.g. ~790 → ~550 tokens), opt-in at `init`;
+  reduces window occupation without changing behavior for capable models.
+- Anchor lazy-load: make `load_memory` default to blueprints+lessons, with anchors as a
+  separate request.
+- A `load_memory` token ceiling with a "truncated, use `sections`" note.
+- Trimming tool descriptions while preserving their self-signaling intent.
+
+> **Caution:** None of these create "saving within a single chat"; they all reduce either window
+> occupation or per-session overhead. The core benefit remains cross-session.
 
 ---
 
 ## 9. Conclusion
 
-1. **The user's thesis is correct:** ZipMem does not save within a session, and **should not even
-   appear to** — its value is in cross-session context restore.
+1. **ZipMem does not save within a session**, and should not appear to — its value is in
+   cross-session context restore.
 2. **Short/one-off chat → don't use** (net 1–10% loss).
-3. **Long, multi-session, mature project → net 6–30% saving;** the multiplier = number of
+3. **Long, multi-session, mature project → net 6–30% saving;** the multiplier is number of
    sessions + project maturity, not chat length.
-4. **The default `balanced` mode is on point.** `aggressive` only for crash-critical work;
+4. **The default `balanced` mode is a sensible choice.** `aggressive` suits crash-critical work;
    `conservative` is most efficient in token-frugal / long-single-session scenarios.
-5. **The biggest efficiency lever = checkpoint cadence** and **`load_memory` output size**;
+5. **The biggest efficiency levers are checkpoint cadence and `load_memory` output size;**
    static prompt shortening is secondary (mostly cached).
 
 ---
 
 *This report is a cost model, not an exact bill. The numbers are sensitive to the stated
-assumptions. For real measurement: it is recommended to validate these estimates against Claude
-Code's token counters (`/cost`) over a few real sessions.*
+assumptions and will change as the tokenizer, model, and implementation evolve. To validate for
+your own workload, compare against Claude Code's token counters (`/cost`) over a few real
+sessions.*
