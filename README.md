@@ -46,12 +46,13 @@ Requires Node.js ≥ 18.
 ## Quick start
 
 ```bash
-# 1. Initialize in your project root (once)
+# 1. Initialize in your project root (once per project)
 cd your-project
 zipmem init
 
-# 2. Register the MCP server with Claude Code (once)
-claude mcp add zipmem-mcp -- npx zipmem-mcp
+# 2. Register the MCP server with Claude Code
+#    (add -s user to make it available in every project — see below)
+claude mcp add -s user zipmem-mcp -- npx zipmem-mcp
 ```
 
 That's it. `zipmem init`:
@@ -79,6 +80,46 @@ If you register MCP servers via a JSON config (`claude_desktop_config.json` or s
 ```
 
 The server reads `CLAUDE_PROJECT_DIR` (set automatically by Claude Code) to find the project's `.zipmem/`. It otherwise falls back to the nearest `.zipmem/` ancestor of the working directory.
+
+---
+
+## Using zipmem across multiple projects
+
+zipmem works per-project, and getting it running everywhere depends on **two separate, independent** steps. If it works in one project but seems dead in another, one of these is almost always the reason:
+
+**1. Register the MCP server at the right scope.** Claude Code's `claude mcp add` defaults to **`local`** scope — the server is then only visible inside the *one* directory where you ran it. In any other project the tools simply don't exist. To register it once for **all** your projects, use user scope:
+
+```bash
+claude mcp add -s user zipmem-mcp -- npx zipmem-mcp
+```
+
+Verify what's registered (and at which scope) from inside the project that isn't working:
+
+```bash
+claude mcp list
+```
+
+If `zipmem-mcp` isn't listed there, that's the problem — re-add it with `-s user` (or `-s project` to share it with a repo via a committed `.mcp.json`).
+
+**2. Run `zipmem init` in *every* project.** This is per-project, not per-machine. Registering the server is not enough on its own, because `init` is what:
+
+- creates that project's `.zipmem/state.json` (without it there's no memory to load), **and**
+- injects the Constitutional Directive into that project's `CLAUDE.md`. **Without the directive the agent never learns to call the tools** — the server is running but nothing triggers it, so it looks like "zipmem doesn't work here."
+
+```bash
+cd your-other-project
+zipmem init
+```
+
+> **Heads-up on project resolution.** The server locates memory via `CLAUDE_PROJECT_DIR` → the nearest `.zipmem/` **ancestor** → `cwd`. If a project has no `.zipmem/` of its own but sits *inside* another project that does, the agent can silently read/write the **parent** project's memory. Running `zipmem init` in each project gives it its own `.zipmem/` and avoids this.
+
+**Quick checklist when a project "doesn't work":**
+
+| Symptom | Check | Fix |
+| --- | --- | --- |
+| Tools not offered at all | `claude mcp list` — is `zipmem-mcp` there? | `claude mcp add -s user zipmem-mcp -- npx zipmem-mcp` |
+| Server runs but agent never calls it | Is the directive in this project's `CLAUDE.md`? Is there a `.zipmem/`? | `zipmem init` in the project root |
+| Wrong / unexpected memory loads | Does a parent folder have a `.zipmem/`? | `zipmem init` here so the project has its own store |
 
 ---
 
